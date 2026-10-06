@@ -1,6 +1,3 @@
-# P1 architecture decisions
-
-These documents define the production v1 design for Loyalty. They complete the
 P1 Architecture issues; they do not claim that the backend is implemented.
 
 The repository currently contains a React frontend demo. Its browser storage,
@@ -36,5 +33,5 @@ game state, session-cookie authentication with CSRF, and transactional validatio
   multiplayer is included in this architecture.
 - Keep the prototype's frontend presentation while replacing demo state with
   authorised server responses during the integration issues.
-
-The frontend implementation guide remains in [frontend/README.md](../../frontend/README.md).
+the frontend implementation guide remains in [frontend/README.md](../../frontend/README.md).
+by Amir
