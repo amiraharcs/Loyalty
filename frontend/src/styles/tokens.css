@@ -1,0 +1,23 @@
+@font-face {
+  font-family: 'Geist';
+  src: url('../assets/fonts/geist-latin.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  font-family: 'Geist', sans-serif;
+  color: #1a1a1a;
+  background: #f5f4ef;
+  --background: #f5f4ef;
+  --foreground: #1a1a1a;
+  --muted: #8a8a8e;
+  --accent: #f4a261;
+}
+
+@theme inline {
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --font-sans: 'Geist', sans-serif;
+}

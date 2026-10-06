@@ -1,1 +1,41 @@
 @import "tailwindcss";
+@import './tokens.css';
+
+body { margin: 0; min-width: 280px; }
+#root { max-width: 430px; min-height: 100svh; margin: 0 auto; position: relative; overflow-x: clip; }
+button, a, input { -webkit-tap-highlight-color: transparent; }
+button { cursor: pointer; }
+button:disabled { cursor: not-allowed; }
+:focus-visible { outline: 2px solid #1a1a1a; outline-offset: 4px; }
+.page { min-height: 100svh; padding-bottom: calc(96px + env(safe-area-inset-bottom)); }
+.surface { background: white; border-radius: 24px; box-shadow: 0 1px 3px rgb(0 0 0 / 10%), 0 1px 2px rgb(0 0 0 / 6%); }
+.button { position: relative; overflow: hidden; width: 100%; border-radius: 16px; padding: 16px; font-size: 15px; font-weight: 600; transition: transform 150ms; }
+.button:active:not(:disabled) { transform: scale(.95); }
+.button--primary { background: #1a1a1a; color: white; }
+.button--secondary { background: white; color: #1a1a1a; border: 1px solid #e5e5ea; }
+.button--accent { background: #f4a261; color: white; }
+.button:disabled { background: #e5e5ea; color: #8a8a8e; }
+.button-shimmer { position: absolute; inset: 0; background: linear-gradient(105deg, transparent 35%, rgb(255 255 255 / 14%) 50%, transparent 65%); background-size: 200% 100%; animation: shimmer 1.4s ease-in-out 2; pointer-events: none; }
+.bottom-navigation { position: fixed; z-index: 40; bottom: 0; left: 50%; transform: translateX(-50%); width: 100%; max-width: 430px; background: white; border-top: 1px solid #e5e5ea; padding: 8px 24px calc(8px + env(safe-area-inset-bottom)); }
+.nav-item { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 4px 16px; color: #8a8a8e; transition: color 150ms; }
+.nav-item--active { color: #1a1a1a; font-weight: 600; }
+.mascot-frame { width: 352px; max-width: 100%; height: 352px; pointer-events: none; }
+.sheet-layer { position: fixed; inset: 0; z-index: 100; }
+.sheet-backdrop { position: absolute; inset: 0; background: rgb(0 0 0 / 40%); }
+.sheet-panel { position: absolute; bottom: 0; left: 0; right: 0; max-width: 430px; margin: 0 auto; max-height: 90svh; overflow-y: auto; border-radius: 24px 24px 0 0; background: #f5f4ef; padding: 24px 24px calc(40px + env(safe-area-inset-bottom)); outline: none; animation: sheet-in 200ms ease-out; }
+.loyalty-card { position: relative; width: 100%; height: 100%; transform-style: preserve-3d; transition: transform .55s cubic-bezier(.4,.2,.2,1); }
+.loyalty-card-face { position: absolute; inset: 0; border-radius: 24px; backface-visibility: hidden; box-shadow: 0 20px 25px -5px rgb(0 0 0 / 10%), 0 8px 10px -6px rgb(0 0 0 / 10%); }
+.scan-ring { position: absolute; width: 96px; height: 96px; border-radius: 50%; border: 1px solid #1a1a1a; opacity: 0; animation: scan-ring 2.8s ease-out infinite; }
+.game-preview { display: flex; flex-direction: column; height: calc(100svh - 70px - env(safe-area-inset-bottom)); min-height: 550px; }
+.game-scene { position: relative; overflow: hidden; flex: 1; min-height: 0; border-radius: 24px; border: 2px solid #1a1a1a; background-color: white; background-image: url('../assets/game/pattern.svg'); }
+.game-scene--preview { margin: 0 20px; max-height: 46svh; }
+.game-scene--result { max-height: 49svh; }
+.preview-platform { position: absolute; height: 13px; border: 2px solid #1a1a1a; border-radius: 999px; box-shadow: 2px 5px 0 #1a1a1a; }
+.game-canvas { position: fixed; inset: 0; z-index: 50; width: 100%; height: 100%; touch-action: none; }
+.game-over { position: fixed; inset: 0; z-index: 80; display: flex; flex-direction: column; gap: 14px; padding: 48px 20px calc(24px + env(safe-area-inset-bottom)); background: #f5f4ef; overflow-y: auto; }
+.best-ribbon { position: absolute; top: 26px; right: -58px; z-index: 20; width: 200px; padding: 7px 0; transform: rotate(45deg); background: #e8843a; color: white; text-align: center; font-size: 8px; font-weight: 900; text-transform: uppercase; letter-spacing: .1em; }
+body:has(.game-canvas) .bottom-navigation { z-index: 70; }
+@keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+@keyframes sheet-in { from { transform: translateY(20px); opacity: .8; } to { transform: translateY(0); opacity: 1; } }
+@keyframes scan-ring { from { transform: scale(.7); opacity: .35; } to { transform: scale(1.8); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; } }
