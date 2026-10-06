@@ -67,6 +67,8 @@ physics outside React avoids component updates for every moving object.
 
 ## Prototype boundaries
 
+Production planning is documented in [P1 architecture decisions](../docs/architecture/README.md).
+
 This remains a frontend demo. The QR is decorative; contactless scanning and
 Wallet are visual demos. Opponents are fixtures, the streak does not track real
 visits, and there is no backend, payment integration or automatic weekly reset.
