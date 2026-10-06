@@ -18,6 +18,11 @@ than deploying microservices. Backend delivery belongs to P2 and later phases.
 | [#4 Use cases and business rules](https://github.com/amiraharcs/Loyalty/issues/4) | [Business rules](business-rules.md) |
 | [#5 Domain model](https://github.com/amiraharcs/Loyalty/issues/5) | [Domain model and ER diagrams](domain-model.md) |
 | [#6 REST API conventions](https://github.com/amiraharcs/Loyalty/issues/6) | [API conventions](api-conventions.md) |
+| [#7 Security and testing](https://github.com/amiraharcs/Loyalty/issues/7) | [Security and testing strategy](security-and-testing.md) |
+
+Read the documents in issue order. Together they define one production baseline:
+explicit role grants, daily visits and an immutable point ledger, server-owned
+game state, session-cookie authentication with CSRF, and transactional validation.
 
 ## Reading and implementation conventions
 

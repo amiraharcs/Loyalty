@@ -64,10 +64,11 @@ erDiagram
     CUSTOMER_PROFILE ||--|| LOYALTY_ACCOUNT : owns
     CUSTOMER_PROFILE ||--|| STREAK : tracks
     CUSTOMER_PROFILE ||--o{ VISIT : makes
+    LOYALTY_ACCOUNT ||--o{ VISIT : credits
     STORE ||--o{ VISIT : hosts
     USER ||--o{ VISIT : confirms
     LOYALTY_ACCOUNT ||--o{ POINT_TRANSACTION : records
-    VISIT o|--o| POINT_TRANSACTION : earns
+    VISIT o|--|| POINT_TRANSACTION : earns
     CUSTOMER_PROFILE ||--o{ REWARD_REDEMPTION : requests
     STORE ||--o{ REWARD_REDEMPTION : fulfils
     REWARD ||--o{ REWARD_REDEMPTION : defines
@@ -191,6 +192,9 @@ erDiagram
   staff-store pair. Index staff assignments by active user/store.
 - Unique customer/businessDate on qualifying Visit; unique Visit earning source
   on PointTransaction. Restrict valid source fields by transaction type.
+  Cross-check customer ownership on account/visit, session/consumption and
+  entitlement/redemption references; valid independent IDs must not be combined
+  into an operation against a different customer's aggregate.
 - Index ledger by accountId/createdAt/id; use `BIGINT` for amounts and totals.
   API values must stay within JavaScript's safe-integer range, checked before
   an operation commits. No floating-point points or client-supplied balance.
