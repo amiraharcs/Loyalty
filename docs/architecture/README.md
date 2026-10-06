@@ -17,6 +17,7 @@ than deploying microservices. Backend delivery belongs to P2 and later phases.
 | [#3 Actors and authorisation](https://github.com/amiraharcs/Loyalty/issues/3) | [Roles and permissions](roles-and-permissions.md) |
 | [#4 Use cases and business rules](https://github.com/amiraharcs/Loyalty/issues/4) | [Business rules](business-rules.md) |
 | [#5 Domain model](https://github.com/amiraharcs/Loyalty/issues/5) | [Domain model and ER diagrams](domain-model.md) |
+| [#6 REST API conventions](https://github.com/amiraharcs/Loyalty/issues/6) | [API conventions](api-conventions.md) |
 
 ## Reading and implementation conventions
 
