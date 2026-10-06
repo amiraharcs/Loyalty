@@ -15,6 +15,7 @@ than deploying microservices. Backend delivery belongs to P2 and later phases.
 | Issue | Decision document |
 | --- | --- |
 | [#3 Actors and authorisation](https://github.com/amiraharcs/Loyalty/issues/3) | [Roles and permissions](roles-and-permissions.md) |
+| [#4 Use cases and business rules](https://github.com/amiraharcs/Loyalty/issues/4) | [Business rules](business-rules.md) |
 
 ## Reading and implementation conventions
 
