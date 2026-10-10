@@ -1,6 +1,6 @@
 # Loyalty backend
 
-Java 21, Spring Boot 4.1.1 and Maven. Issues #8–#10 establish a modular monolith
+Java 21, Spring Boot 4.1.1 and Maven. Issues #8–#11 establish a modular monolith
 with PostgreSQL and Flyway. No business APIs or domain tables are implemented.
 [P1 architecture](../docs/architecture/README.md) remains the source of truth.
 
@@ -128,10 +128,96 @@ Root package: `com.amiraharcs.loyalty`. Domain boundaries remain lightweight
 settings guard. No controllers, entities, repositories or business services
 are introduced. The frontend is unchanged.
 
-All HTTP requests remain denied (anonymous callers receive `401`; authenticated
-callers and CSRF failures receive `403`); no generated user, form login or HTTP Basic is
-added. Actuator endpoints remain disabled. CORS/health policy, authentication
-and domain features belong to later issues.
+Only safe health reads and valid API CORS preflights are public. All other routes
+remain denied (anonymous callers receive `401`; authenticated callers and CSRF
+failures receive `403`). No generated user, form login or HTTP Basic is added.
+Authentication and domain features belong to later issues.
+
+## CORS and frontend connectivity
+
+Spring Security integrates one `UrlBasedCorsConfigurationSource`; controllers
+must not add individual `@CrossOrigin` annotations. The policy applies only to
+`/api/v1/**`. It permits credentials for explicit origins, without accepting
+wildcards or origin patterns. CORS does not authenticate callers or authorize
+business actions; a valid preflight succeeds while the actual protected API
+request still receives `401`/`403`. CSRF remains enabled.
+
+Development defaults match Vite: `http://localhost:5173` and
+`http://127.0.0.1:5173`. Set `CORS_ALLOWED_ORIGINS` to override them, for example
+when Vite selects another port. Use exact comma-separated HTTP(S) origins with
+no path, trailing slash, query, fragment, credentials or wildcard. Invalid
+entries fail startup without echoing their values. An empty list grants no
+cross-origin permissions.
+
+Production has **no default origins**. Supply `CORS_ALLOWED_ORIGINS` explicitly
+through the deployment environment when cross-origin browser access is needed.
+Missing/empty configuration rejects cross-origin API requests while same-origin
+requests remain usable and protected. Do not copy the local `.env` into a
+production deployment. The architecture still prefers the same-origin reverse
+proxy for React and `/api/v1`; this issue does not configure hosting, change
+cookie policy or introduce cross-site authentication.
+
+Allowed methods: `GET`, `HEAD`, `POST`, `PATCH`, `DELETE`, `OPTIONS`, matching the
+P1 API contract. `PUT` is excluded. Allowed request headers: `Accept`,
+`Content-Type`, `X-CSRF-TOKEN`, `Idempotency-Key`. There is no bearer scheme or
+client-supplied request ID allowance. Exposed response headers: `X-Request-ID`,
+`Location`, `Retry-After`. Preflight cache duration is 600 seconds. Unapproved
+origins, methods and headers receive Spring's generic CORS rejection; no API
+permissions are granted. Cross-origin requests outside `/api/v1/**`, including
+Actuator requests, are explicitly rejected.
+
+```sh
+curl -i -X OPTIONS http://127.0.0.1:8080/api/v1/not-implemented \
+  -H 'Origin: http://localhost:5173' \
+  -H 'Access-Control-Request-Method: POST' \
+  -H 'Access-Control-Request-Headers: Content-Type,X-CSRF-TOKEN,Idempotency-Key'
+```
+
+## Health checks and Actuator policy
+
+Only the `health` endpoint is enabled for read access and exposed over HTTP.
+All other endpoint access defaults to `none`; JMX exposure and Actuator discovery
+are disabled. Security permits **GET/HEAD only** at these exact paths:
+
+| Path | Contents | Database outage after startup |
+| --- | --- | --- |
+| `/actuator/health` | Aggregate health, including built-in PostgreSQL datasource check | `503`, `DOWN` |
+| `/actuator/health/readiness` | Spring readiness state + PostgreSQL datasource check | `503`, `DOWN` |
+| `/actuator/health/liveness` | Spring liveness state only | `200`, `UP` while application is alive |
+
+Healthy checks return `200`, `UP`. Public output never includes components or
+health details, even for an authenticated principal: no database name/URL,
+credentials, hostnames or exception details. The aggregate response may list
+available group names (`liveness`, `readiness`); probe responses contain status.
+Component health remains available inside the application through Spring Boot's
+built-in `DataSourceHealthIndicator`, not a public `/actuator/health/db` route.
+All other Actuator paths (including `/actuator`, `/env`, `/metrics`, `/beans`,
+`/configprops` and `/heapdump`) remain denied even for an authenticated caller.
+
+The probes use supported Spring Boot health groups on the same HTTP port as the
+application. No extra management port, `/livez`/`/readyz`, metrics endpoint or
+custom health controller is introduced. Use readiness to remove a failing
+instance from traffic; use liveness for restart decisions. A database outage
+must not cause restart loops. Database checks can wait up to the datasource
+connection timeout (10 seconds by default); choose monitoring timeouts
+accordingly. If the database is invalid/unavailable **at startup**, Flyway still
+fails startup as established in Issue #9. After startup, DB health failures
+produce `DOWN`; liveness remains independent.
+
+```sh
+curl -i http://127.0.0.1:8080/actuator/health
+curl -i http://127.0.0.1:8080/actuator/health/readiness
+curl -i http://127.0.0.1:8080/actuator/health/liveness
+```
+
+Monitoring clients should call these endpoints without an `Origin` header.
+No frontend-facing health UI or authentication workflow is added.
+
+The tests cover development/production CORS, unsafe origin configuration,
+preflights, protected APIs, health secrecy and sensitive endpoint restrictions.
+A dedicated disposable PostgreSQL container is stopped during the availability
+test: health/readiness become `DOWN` while liveness remains `UP`. It never stops
+the shared test database or a local/production service.
 
 ## Shared API errors and request validation
 
@@ -201,6 +287,8 @@ classpath; the packaged application has no product controllers.
 
 ## References
 
+- [Spring Security CORS integration](https://docs.spring.io/spring-security/reference/servlet/integrations/cors.html)
+- [Spring Boot Actuator health](https://docs.spring.io/spring-boot/api/rest/actuator/health.html)
 - [Spring Boot database initialization](https://docs.spring.io/spring-boot/4.1/how-to/data-initialization.html)
 - [Testcontainers PostgreSQL](https://java.testcontainers.org/modules/databases/postgres/)
 - [Architecture domain model](../docs/architecture/domain-model.md)

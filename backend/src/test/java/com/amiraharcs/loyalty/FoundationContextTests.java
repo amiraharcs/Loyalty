@@ -19,6 +19,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.head;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -104,8 +105,25 @@ abstract class FoundationContextTests {
     }
 
     @Test
-    void doesNotExposeActuatorYet() throws Exception {
+    void exposesSafeHealthWithoutOpeningOtherActuatorEndpoints() throws Exception {
         assertThat(environment.getProperty("management.endpoints.access.default")).isEqualTo("none");
-        mvc.perform(get("/actuator/health")).andExpect(status().isUnauthorized());
+        assertThat(environment.getProperty("management.endpoint.health.show-details")).isEqualTo("never");
+        assertThat(environment.getProperty("management.endpoint.health.show-components")).isEqualTo("never");
+        for (String path : new String[]{"/actuator/health", "/actuator/health/liveness", "/actuator/health/readiness"}) {
+            mvc.perform(get(path)).andExpect(status().isOk())
+                    .andExpect(jsonPath("status").value("UP"))
+                    .andExpect(jsonPath("components").doesNotExist())
+                    .andExpect(jsonPath("details").doesNotExist());
+        }
+        mvc.perform(head("/actuator/health")).andExpect(status().isOk());
+        mvc.perform(get("/actuator/health").with(user("fixture").roles("ADMIN")))
+                .andExpect(status().isOk()).andExpect(jsonPath("components").doesNotExist())
+                .andExpect(jsonPath("details").doesNotExist());
+        mvc.perform(post("/actuator/health").with(csrf())).andExpect(status().isUnauthorized());
+        for (String path : new String[]{"/actuator", "/actuator/env", "/actuator/configprops", "/actuator/beans",
+                "/actuator/metrics", "/actuator/heapdump", "/actuator/health/db"}) {
+            mvc.perform(get(path)).andExpect(status().isUnauthorized());
+            mvc.perform(get(path).with(user("fixture").roles("ADMIN"))).andExpect(status().isForbidden());
+        }
     }
 }

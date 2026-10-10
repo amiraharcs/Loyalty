@@ -7,15 +7,24 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.http.HttpMethod;
+import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
 /** Closed foundation policy until authentication and endpoint permissions are implemented. */
 @Configuration(proxyBeanMethods = false)
 class FoundationSecurityConfiguration {
 
     @Bean
-    SecurityFilterChain foundationSecurityFilterChain(HttpSecurity http, ApiErrorWriter errors) throws Exception {
+    SecurityFilterChain foundationSecurityFilterChain(HttpSecurity http, ApiErrorWriter errors,
+            UrlBasedCorsConfigurationSource corsConfigurationSource) throws Exception {
         return http
-                .authorizeHttpRequests(authorize -> authorize.anyRequest().denyAll())
+                .cors(cors -> cors.configurationSource(corsConfigurationSource))
+                .authorizeHttpRequests(authorize -> authorize
+                        .requestMatchers(HttpMethod.GET, "/actuator/health", "/actuator/health/liveness",
+                                "/actuator/health/readiness").permitAll()
+                        .requestMatchers(HttpMethod.HEAD, "/actuator/health", "/actuator/health/liveness",
+                                "/actuator/health/readiness").permitAll()
+                        .anyRequest().denyAll())
                 .exceptionHandling(exceptions -> exceptions
                         .authenticationEntryPoint((request, response, exception) ->
                                 errors.write(ApiErrorCode.UNAUTHENTICATED, request, response))

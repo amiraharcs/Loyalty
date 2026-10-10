@@ -53,5 +53,28 @@ logging:
 management:
   endpoints:
     access:
-      # Actuator is on the classpath only; endpoint/health policy belongs to Issue #11.
       default: none
+    web:
+      exposure:
+        include: health
+      discovery:
+        enabled: false
+    jmx:
+      exposure:
+        exclude: "*"
+  endpoint:
+    health:
+      access: read-only
+      show-details: never
+      show-components: never
+      probes:
+        enabled: true
+        add-additional-paths: false
+      group:
+        liveness:
+          include: livenessState
+        readiness:
+          include: readinessState,db
+  health:
+    db:
+      enabled: true
