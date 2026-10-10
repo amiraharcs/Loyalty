@@ -1,7 +1,8 @@
 # Loyalty backend
 
 Java 21, Spring Boot 4.1.1 and Maven. Issues #8–#11 establish a modular monolith
-with PostgreSQL and Flyway. No business APIs or domain tables are implemented.
+with PostgreSQL and Flyway. Issue #12 adds identity persistence only; no
+registration, login or other product APIs are implemented.
 [P1 architecture](../docs/architecture/README.md) remains the source of truth.
 
 ## Local development
@@ -80,8 +81,9 @@ support. All profiles use:
 - JPA open-in-view disabled and JDBC timestamps in UTC.
 
 `V1__initialize_persistence.sql` documents the schema and revokes public CREATE
-on it. It creates no domain tables. The only foundation table is Flyway's own
-schema history. Add future immutable migrations as `V2__description.sql`, etc.;
+on it. It creates no domain tables. V1 adds only Flyway's schema history; V2 adds
+the identity model described below. Add future immutable migrations as
+`V3__description.sql`, etc.;
 never edit a migration that has already run. A nonempty unmanaged `loyalty`
 schema fails migration rather than being silently adopted.
 
@@ -114,7 +116,7 @@ Docker must be running. Testcontainers creates an isolated PostgreSQL 17 instanc
 on a random port, independent of your Compose database, and cleans it up when
 the test JVM ends. Tests never reset the development database. The suite checks
 both Spring profiles, PostgreSQL connectivity, Flyway version/checksum validation,
-JPA startup without domain entities, empty-database migration, repeat migration,
+JPA identity mapping/schema validation, empty-database migration, repeat migration,
 refusal of unmanaged schema/clean, and production configuration failures.
 Existing closed security and validation checks remain in place. `verify` compiles,
 tests and packages a runnable JAR.
@@ -125,13 +127,73 @@ Root package: `com.amiraharcs.loyalty`. Domain boundaries remain lightweight
 `package-info.java` files: `auth`, `customer`, `loyalty`, `visit`, `store`,
 `reward`, `qr`, `game`, `leaderboard`, `competition`, `admin`, `audit`, `common`.
 `common/config` contains the foundation security policy and production database
-settings guard. No controllers, entities, repositories or business services
-are introduced. The frontend is unchanged.
+settings guard. Identity entities/repositories live under `auth/model`,
+`auth/repository`, `customer/model` and `customer/repository`. Other domain
+boundaries remain package placeholders. No product controllers or business
+services are introduced. The frontend is unchanged.
 
 Only safe health reads and valid API CORS preflights are public. All other routes
 remain denied (anonymous callers receive `401`; authenticated callers and CSRF
 failures receive `403`). No generated user, form login or HTTP Basic is added.
 Authentication and domain features belong to later issues.
+
+## Identity persistence (Issue #12)
+
+`V2__create_identity_model.sql` adds only `loyalty.users`, `roles`, `user_roles`
+and `customer_profiles`. V1 is unchanged. Hibernate remains in `validate` mode.
+Flyway seeds the three role codes, never users or default credentials.
+
+- `User`: generated UUID, canonical email, supplied password hash, account status,
+  UTC created/updated instants. Email is stripped and lowercased with `Locale.ROOT`.
+  Future services must use `User.canonicalizeEmail` before exact repository lookups.
+  Password hashing/verification is not implemented; callers must eventually supply
+  a hash from the approved encoder, never a plaintext password.
+- `Role`: string code primary key, restricted to CUSTOMER/STAFF/ADMIN. A lazy
+  user-owned many-to-many association maps explicit grants through `user_roles`.
+  Its `(user_id, role_code)` primary key prevents duplicate grants. There is no
+  hierarchy, implicit customer role or SYSTEM role. Role lookup is read-only.
+- `CustomerProfile`: generated UUID and one required, unique user reference;
+  display name, leaderboard alias and a required privacy boolean. No first/last
+  name, profile metadata, loyalty state or game state is invented. Profile is
+  owned through the identity boundary's customer package, separate from credentials.
+
+The architecture specifies activation/deactivation, without a LOCKED lifecycle;
+this model therefore uses ACTIVE/DISABLED only. Session invalidation and last-admin
+protection belong to future authorized services. A profile's CUSTOMER eligibility
+must be checked by that future service; this issue adds no registration/role-grant
+workflow or database trigger tying profile existence to a role.
+
+Storage bounds are implementation decisions: email 254 characters, encoded hash
+512, role/status code 16, display/alias 100. Required strings cannot be blank.
+Email has a database unique constraint plus canonical-form check, so case variants
+cannot coexist. Status/role check constraints reject unsupported values. User
+update time cannot precede creation time. Timestamps are supplied explicitly by
+callers using a server clock; the model does not read the system clock implicitly.
+Profile timestamps are omitted because the agreed catalogue does not specify them.
+The privacy boolean has no automatic default; a later workflow must choose it.
+
+All foreign keys restrict deletion/key updates; no ORM cascading or orphan removal
+is enabled. SQL foreign keys protect users/roles referenced by profiles or grants;
+removing a profile does not remove its identity. Repositories expose only save,
+ID lookup and needed identity/profile lookups; no hard-delete API is offered.
+Roles are migration-owned, so their repository exposes only lookup by code.
+Historical identity deactivation follows the architecture rather than cascade
+removal. The unique/primary-key indexes cover email, profile owner and user grants;
+`ix_user_roles_role_code` supports reverse role-reference checks. Lazy associations
+must be read inside a transaction; entities must never become API response DTOs.
+
+No generated entity `toString`, equality or hash-code includes credentials.
+`passwordHash` is also ignored by Jackson as defense in depth. PostgreSQL JDBC
+server error DETAIL is disabled because failing-row diagnostics may echo a hash;
+do not enable SQL bind-value DEBUG/TRACE logging for real credential data.
+
+`IdentityPersistenceTests` runs against disposable PostgreSQL: repository round
+trips, role/profile relationships, statuses/timestamps, case-variant duplicates,
+required fields, FK/key/deletion constraints, non-cascading persistence/removal,
+and hash safety. The migration tests verify V1+V2 from an empty database,
+repeat migration and checksum protection. Both application profiles validate
+all three entity mappings at startup. There are no auth endpoints or accounts
+seeded by this issue.
 
 ## CORS and frontend connectivity
 
