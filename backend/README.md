@@ -1,8 +1,9 @@
 # Loyalty backend
 
 Java 21, Spring Boot 4.1.1 and Maven. Issues #8–#11 establish a modular monolith
-with PostgreSQL and Flyway. Issues #12–#13 add identity persistence and customer
-registration. Login and other product APIs are not implemented.
+with PostgreSQL and Flyway. Issues #12–#14 add identity persistence, customer
+registration and server-side authentication sessions. Other product APIs remain
+unimplemented.
 [P1 architecture](../docs/architecture/README.md) remains the source of truth.
 
 ## Local development
@@ -130,14 +131,17 @@ Root package: `com.amiraharcs.loyalty`. Domain boundaries remain lightweight
 settings guard. Identity entities/repositories live under `auth/model`,
 `auth/repository`, `customer/model` and `customer/repository`. Other domain
 boundaries remain package placeholders. Registration DTOs/controllers, validation and services live under `auth/api`,
-`auth/validation`, `auth/service`, with the encoder in `auth/config`. No login or
-other business workflows are introduced. The frontend is unchanged.
+`auth/validation`, `auth/service`, with password/session configuration in
+`auth/config` and authentication infrastructure in `auth/security`. Shared
+rate limiting lives in `common/security`. The frontend is unchanged.
 
 Safe health reads, valid API CORS preflights, GET `/api/v1/auth/csrf`, and
-CSRF-protected POST `/api/v1/auth/registrations` are public. All other routes
-remain denied (anonymous callers receive `401`; authenticated callers and CSRF
-failures receive `403`). No generated user, form login or HTTP Basic is added.
-Authentication and domain features belong to later issues.
+CSRF-protected POST `/api/v1/auth/registrations` and `/api/v1/auth/sessions`,
+and DELETE `/api/v1/auth/sessions/current` are public. GET `/api/v1/auth/me`
+requires an active authenticated session. All other routes remain denied
+(anonymous callers receive `401`; authenticated callers and CSRF failures
+receive `403`). No generated user, HTML login, HTTP Basic, or role hierarchy is
+added. Domain permissions belong to Issue #15 and later features.
 
 ## Identity persistence (Issue #12)
 
@@ -160,8 +164,9 @@ Flyway seeds the three role codes, never users or default credentials.
   owned through the identity boundary's customer package, separate from credentials.
 
 The architecture specifies activation/deactivation, without a LOCKED lifecycle;
-this model therefore uses ACTIVE/DISABLED only. Session invalidation and last-admin
-protection belong to future authorized services. A profile's CUSTOMER eligibility
+this model therefore uses ACTIVE/DISABLED only. Issue #14 blocks sessions when
+the current database status is DISABLED. Account-management workflows and
+last-admin protection belong to future authorized services. A profile's CUSTOMER eligibility
 is supplied by RegistrationService's fixed CUSTOMER assignment. Other role/profile
 workflows remain deferred; no trigger ties profile existence to a role.
 
@@ -192,10 +197,10 @@ do not enable SQL bind-value DEBUG/TRACE logging for real credential data.
 `IdentityPersistenceTests` runs against disposable PostgreSQL: repository round
 trips, role/profile relationships, statuses/timestamps, case-variant duplicates,
 required fields, FK/key/deletion constraints, non-cascading persistence/removal,
-and hash safety. The migration tests verify V1+V2 from an empty database,
+and hash safety. The migration tests verify all migrations from an empty database,
 repeat migration and checksum protection. Both application profiles validate
 all three entity mappings at startup. Issue #12 seeds no users or credentials. Registration is added by Issue #13;
-login remains deferred.
+login is added by Issue #14.
 
 ## Customer registration and password security (Issue #13)
 
@@ -229,8 +234,8 @@ offline dataset if needed; no raw password is sent to an external service.
 `{argon2id-v1}` encodings: Argon2id, **19 MiB memory, two iterations, parallelism
 one**, 16-byte random salts and 32-byte output. Bouncy Castle `bcprov-jdk18on`
 1.86 supplies the implementation. BCrypt is not used because the architecture
-explicitly specifies Argon2id. Encoder matching is tested for reuse in Issue #14,
-but no login or verification endpoint is introduced. Benchmark and tune on the
+explicitly specifies Argon2id. Issue #14 reuses the same encoder for matching
+and conditional hash upgrades during login. Benchmark and tune on the
 actual deployment hardware; the password test prints a local five-operation
 encode/verify benchmark without credentials.
 
@@ -250,7 +255,7 @@ Passwords and hashes never appear in responses or service logs; PostgreSQL's
 failing-row diagnostic detail remains disabled. Do not enable SQL bind-value or
 raw HTTP body DEBUG/TRACE logging for credential traffic.
 
-### CSRF bootstrap without authentication sessions
+### CSRF bootstrap
 
 GET **`/api/v1/auth/csrf`** returns `{headerName, token}` with `no-store`. Retain
 its masked token in memory, send it as `X-CSRF-TOKEN`, and include cookies in the
@@ -263,7 +268,7 @@ Path=/, with no Domain: `loyalty-csrf` locally and Secure `__Host-loyalty-csrf`
 in production. It is solely a CSRF cookie, not a login/session token. A missing
 or invalid token returns `403 FORBIDDEN`; CSRF is not disabled or exempted for
 registration. The request cache is disabled to avoid anonymous authentication
-sessions. No login/logout/current-user route is opened.
+sessions. The Issue #14 session endpoints use the same CSRF mechanism.
 
 ### Registration attempt limit and staged delivery
 
@@ -274,8 +279,8 @@ does not parse caller-supplied forwarding headers. The in-memory map expires
 old entries and caps tracked addresses at 10,000, failing closed at capacity.
 This is a per-instance limiter for the modular monolith: restarts reset it;
 a multi-instance deployment needs a shared/gateway budget. Configure trusted
-proxy address handling deliberately before deployment. No login limiter/workflow
-is implemented in this issue.
+proxy address handling deliberately before deployment. Issue #14 extends the
+same sliding-window infrastructure for login, as documented below.
 
 **Loyalty account creation is deliberately deferred to P4.** The full architecture
 requires registration to initialize loyalty/streak/game state eventually, but
@@ -293,6 +298,109 @@ route protection and the registration rate limit.
 
 ```sh
 ./mvnw -B -ntp -Dtest=RegistrationTests,RegistrationCsrfTests,ProductionCsrfTests,PasswordSecurityTests,RegistrationRateLimiterTests test
+./mvnw -B -ntp clean verify
+```
+
+## Login and authenticated sessions (Issue #14)
+
+| Method | Endpoint | Behaviour |
+| --- | --- | --- |
+| POST | `/api/v1/auth/sessions` | CSRF-protected email/password login; `201` current-user DTO and `Location: /api/v1/auth/me`. |
+| GET | `/api/v1/auth/me` | `200` current-user DTO, or JSON `401 UNAUTHENTICATED`. |
+| DELETE | `/api/v1/auth/sessions/current` | CSRF-protected, idempotent `204`; invalidate the database session and expire both cookies. |
+
+Login accepts only `{email, password}`. Email uses registration's exact strip +
+`Locale.ROOT` lowercase canonicalizer. Password bytes/Unicode/spaces are preserved;
+the new-registration blocklist is not reapplied to existing accounts. Required,
+bounded fields are validated; malformed/invalid input uses the shared `400`
+contract. A wrong password, absent user, disabled user or exceeded login budget
+returns the same generic RFC 9457 `401 UNAUTHENTICATED`, without redirects or
+account-status details. Absent users still perform an Argon2id comparison against
+a random dummy hash. Successful authentication conditionally upgrades a stored
+hash when the existing encoder requests it; the update cannot overwrite a
+concurrent password change or reactivate a disabled account.
+
+The login and current-user DTO is `{userId, displayName, roles}`. `userId` is an
+opaque UUID and `roles` contains only explicit current database grants; ADMIN
+or STAFF never implicitly gains CUSTOMER. `displayName` comes from the customer
+profile and is `null` for a non-customer identity without a profile. Email, hash,
+password, session ID, timestamps and entities are never returned. Responses use
+`Cache-Control: no-store`.
+
+Spring Session JDBC persists opaque sessions in PostgreSQL using
+**`V3__create_server_sessions.sql`**. V1/V2 remain unchanged. The tables are
+`loyalty.spring_session` and `loyalty.spring_session_attributes`; indexes support
+session ID, expiry and principal lookup. Attribute deletion cascades only from
+these transient sessions, never domain history. Spring's built-in PostgreSQL
+query customizer handles concurrent attribute inserts. Flyway owns the schema;
+`spring.session.jdbc.initialize-schema=never` and Hibernate `validate` remain
+mandatory. Session rows contain Spring Security's UUID-only principal, explicit
+authorities and server-controlled expiry/password-version metadata, never raw
+passwords, encoded password hashes or email. Attributes use Spring Session's
+standard JDBC serialization: treat the session database as trusted sensitive
+server storage, not a client-editable data source.
+
+Production cookie: **`__Host-loyalty-session`**, Secure, HttpOnly, SameSite=Lax,
+Path=/, no Domain, opaque random value. Local HTTP development uses
+**`loyalty-session`** with Secure disabled; all other attributes are identical.
+No JWT, bearer token, browser localStorage/sessionStorage token, remember-me,
+password-reset or verification flow is introduced. Production requires HTTPS;
+prefer the architecture's same-origin reverse proxy. Cross-origin local calls
+must include credentials and use matching hostnames.
+
+Spring Session enforces **30 minutes idle**. A separate authentication timestamp
+uses the injected UTC server `Clock`; a filter rejects/invalidate sessions at
+**12 hours absolute**, even when their idle timeout is continually refreshed.
+Missing/future timestamps fail closed. Login invokes Spring's session fixation
+strategy and explicitly saves the SecurityContext; pre-authenticated and
+already-authenticated session IDs rotate. Every authenticated request reloads
+account status, roles and a one-way password-hash version from PostgreSQL.
+Disabled/deleted accounts and changed passwords lose access and their current
+session is removed. Changed explicit grants rotate the session ID and refresh
+Spring Security authorities without extending the original absolute lifetime.
+Other stored sessions are rejected on their next use; account-management
+workflows are deferred. No new permission-protected business route is opened.
+
+Obtain CSRF through GET `/api/v1/auth/csrf`, keep the masked token in memory,
+and send it with cookies in `X-CSRF-TOKEN` on registration, login and logout.
+**Refresh CSRF after successful login/logout and after a role-change rotation.**
+The old CSRF cookie is cleared; bootstrap creates a fresh token without creating
+an anonymous authentication session. Missing/invalid CSRF is always `403`, even
+for idempotent anonymous logout. Logout deletes the server row/attributes,
+clears authentication and expires the auth cookie. Reusing its old ID returns
+`401`; a repeated logout with freshly bootstrapped CSRF remains `204`.
+
+Login allows **10 failed attempts / 15 minutes / account-IP pair**. An attempt
+reserves a slot before hashing; successful verification releases only that
+attempt, preserving earlier failures in the same rolling window. The independent **50 attempts / 15 minutes / IP** budget counts
+all CSRF-valid login requests, including successes and invalid DTOs, to limit
+credential spraying. Set `LOGIN_IP_ATTEMPT_LIMIT` (1–1000) to tune that second
+budget; the architecture does not prescribe its numeric value. Both budgets
+expire automatically; no permanent account lockout exists. The IP filter returns
+the generic `401` with `Retry-After` when its budget is exhausted. Account keys
+are one-way digests instead of raw email. Registration and login share the same
+bounded, thread-safe sliding-window implementation (maximum 10,000 active keys
+per budget, fail closed at capacity). These limits are **per application instance**
+and reset on restart; multiple instances need a shared/gateway limiter before
+scaling.
+
+The servlet remote address is authoritative. `server.forward-headers-strategy`
+is explicitly `none`, so public `X-Forwarded-For`/`Forwarded` cannot change it.
+Behind a reverse proxy this budgets the proxy address until an operator configures
+forwarding support together with a strict trusted-proxy allowlist. Do not simply
+enable arbitrary forwarded headers. Session/Security DEBUG/TRACE and Hibernate
+bind-value logging are disabled by default to keep cookie/hash secrets out of logs;
+never enable raw request/body or SQL bind logging in deployments with real users.
+
+PostgreSQL integration tests exercise real CSRF cookies and the complete security
+chain: session rows, safe DTOs/logs, generic failures, fixation and re-login,
+logout/old-ID rejection, both timeouts, account/password revocation, fresh grants,
+production/dev cookie attributes, hash upgrades, throttling, forwarding spoofing,
+and unrelated route denial. Rate-limit unit tests cover expiry, independent
+budgets, configuration bounds and concurrent reservations.
+
+```sh
+./mvnw -B -ntp -Dtest=AuthenticatedSessionTests,ProductionSessionTests,LoginRateLimiterTests test
 ./mvnw -B -ntp clean verify
 ```
 
@@ -431,7 +539,7 @@ messages or rejected values; custom constraints receive `INVALID_VALUE`.
 
 Modules can throw `new ResourceNotFoundException()` or `new ConflictException()`.
 These intentionally accept no caller-supplied message. Authentication/access-denied
-exceptions are sanitized too; login remains unimplemented. Never turn
+exceptions are sanitized too. Never turn
 arbitrary database exceptions into business conflicts: unexpected persistence
 failures remain generic `500` errors. Add explicit safe domain codes only with
 the later feature's documented contract. Preserve `Allow`/`Retry-After` headers
@@ -441,7 +549,8 @@ when provided by MVC.
 Security errors use the same DTO via `ApiErrorWriter` because they occur before
 MVC advice. Boot's fallback error settings also disable exception/message/trace
 exposure. MVC and security tests use controllers available only on the test
-classpath; registration is the only implemented product endpoint.
+classpath; production controllers implement only registration and the
+authentication session lifecycle.
 
 ```sh
 ./mvnw -B -ntp -Dtest=ApiErrorTests test
@@ -450,6 +559,8 @@ classpath; registration is the only implemented product endpoint.
 
 ## References
 
+- [Spring Security authentication persistence](https://docs.spring.io/spring-security/reference/servlet/authentication/persistence.html)
+- [Spring Session JDBC configuration](https://docs.spring.io/spring-session/reference/configuration/jdbc.html)
 - [Spring Security CORS integration](https://docs.spring.io/spring-security/reference/servlet/integrations/cors.html)
 - [Spring Boot Actuator health](https://docs.spring.io/spring-boot/api/rest/actuator/health.html)
 - [Spring Boot database initialization](https://docs.spring.io/spring-boot/4.1/how-to/data-initialization.html)
