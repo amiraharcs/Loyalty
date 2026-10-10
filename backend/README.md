@@ -1,8 +1,8 @@
 # Loyalty backend
 
 Java 21, Spring Boot 4.1.1 and Maven. Issues #8–#11 establish a modular monolith
-with PostgreSQL and Flyway. Issue #12 adds identity persistence only; no
-registration, login or other product APIs are implemented.
+with PostgreSQL and Flyway. Issues #12–#13 add identity persistence and customer
+registration. Login and other product APIs are not implemented.
 [P1 architecture](../docs/architecture/README.md) remains the source of truth.
 
 ## Local development
@@ -129,10 +129,12 @@ Root package: `com.amiraharcs.loyalty`. Domain boundaries remain lightweight
 `common/config` contains the foundation security policy and production database
 settings guard. Identity entities/repositories live under `auth/model`,
 `auth/repository`, `customer/model` and `customer/repository`. Other domain
-boundaries remain package placeholders. No product controllers or business
-services are introduced. The frontend is unchanged.
+boundaries remain package placeholders. Registration DTOs/controllers, validation and services live under `auth/api`,
+`auth/validation`, `auth/service`, with the encoder in `auth/config`. No login or
+other business workflows are introduced. The frontend is unchanged.
 
-Only safe health reads and valid API CORS preflights are public. All other routes
+Safe health reads, valid API CORS preflights, GET `/api/v1/auth/csrf`, and
+CSRF-protected POST `/api/v1/auth/registrations` are public. All other routes
 remain denied (anonymous callers receive `401`; authenticated callers and CSRF
 failures receive `403`). No generated user, form login or HTTP Basic is added.
 Authentication and domain features belong to later issues.
@@ -146,8 +148,8 @@ Flyway seeds the three role codes, never users or default credentials.
 - `User`: generated UUID, canonical email, supplied password hash, account status,
   UTC created/updated instants. Email is stripped and lowercased with `Locale.ROOT`.
   Future services must use `User.canonicalizeEmail` before exact repository lookups.
-  Password hashing/verification is not implemented; callers must eventually supply
-  a hash from the approved encoder, never a plaintext password.
+  Registration supplies a hash from the approved encoder described below;
+  other callers must also supply an encoded hash, never a plaintext password.
 - `Role`: string code primary key, restricted to CUSTOMER/STAFF/ADMIN. A lazy
   user-owned many-to-many association maps explicit grants through `user_roles`.
   Its `(user_id, role_code)` primary key prevents duplicate grants. There is no
@@ -160,8 +162,8 @@ Flyway seeds the three role codes, never users or default credentials.
 The architecture specifies activation/deactivation, without a LOCKED lifecycle;
 this model therefore uses ACTIVE/DISABLED only. Session invalidation and last-admin
 protection belong to future authorized services. A profile's CUSTOMER eligibility
-must be checked by that future service; this issue adds no registration/role-grant
-workflow or database trigger tying profile existence to a role.
+is supplied by RegistrationService's fixed CUSTOMER assignment. Other role/profile
+workflows remain deferred; no trigger ties profile existence to a role.
 
 Storage bounds are implementation decisions: email 254 characters, encoded hash
 512, role/status code 16, display/alias 100. Required strings cannot be blank.
@@ -192,8 +194,107 @@ trips, role/profile relationships, statuses/timestamps, case-variant duplicates,
 required fields, FK/key/deletion constraints, non-cascading persistence/removal,
 and hash safety. The migration tests verify V1+V2 from an empty database,
 repeat migration and checksum protection. Both application profiles validate
-all three entity mappings at startup. There are no auth endpoints or accounts
-seeded by this issue.
+all three entity mappings at startup. Issue #12 seeds no users or credentials. Registration is added by Issue #13;
+login remains deferred.
+
+## Customer registration and password security (Issue #13)
+
+Public endpoint: **POST `/api/v1/auth/registrations`**, protected by CSRF. Only
+`email`, `password` and `displayName` are accepted; unknown fields such as roles,
+status, IDs or balances fail with `400 MALFORMED_REQUEST`. The request DTO's
+password is write-only and its `toString` is redacted. Registration never signs
+in, creates an authentication session or issues an authentication token.
+
+```json
+{"email":"member@example.org","password":"a long unique private passphrase","displayName":"Member"}
+```
+
+Success: `201`, `Cache-Control: no-store`, and only
+`{"message":"Registration completed."}`. The architecture gives no more specific
+registration response shape; this minimal DTO intentionally exposes no ID,
+email, hash, entity or role internals. There is no `Location` because registration
+does not expose a retrievable user resource. Invalid input uses the shared
+`400 VALIDATION_ERROR` contract with safe field errors.
+
+Email is stripped/lowercased via the existing canonicalizer before validation
+and persistence. The service validates direct calls too. Names are required and
+limited to 100 characters. Passwords contain **15–128 Unicode code points**;
+spaces and valid Unicode are preserved exactly, with no trimming, normalization,
+truncation or composition rules. Empty/whitespace-only and malformed Unicode
+passwords fail, as do entries in a small local common-password starter blocklist.
+This is not a complete compromised-password corpus. Extend it through a vetted
+offline dataset if needed; no raw password is sent to an external service.
+
+`PasswordEncoder` is Spring's versioned `DelegatingPasswordEncoder`, with
+`{argon2id-v1}` encodings: Argon2id, **19 MiB memory, two iterations, parallelism
+one**, 16-byte random salts and 32-byte output. Bouncy Castle `bcprov-jdk18on`
+1.86 supplies the implementation. BCrypt is not used because the architecture
+explicitly specifies Argon2id. Encoder matching is tested for reuse in Issue #14,
+but no login or verification endpoint is introduced. Benchmark and tune on the
+actual deployment hardware; the password test prints a local five-operation
+encode/verify benchmark without credentials.
+
+Hashing happens before opening a database transaction. All persistence runs in
+one `TransactionTemplate`: existing CUSTOMER catalogue lookup, ACTIVE user,
+explicit CUSTOMER grant and customer profile. A shared injected UTC `Clock`
+supplies timestamps. The profile starts private with generic alias `Member`;
+registration accepts no alias/privacy settings and never derives an alias from
+email. Future profile settings can change this through authorized services.
+No arbitrary role is created and no staff/admin permission can be requested.
+
+The database unique email constraint is the final duplicate/race protection;
+there is no existence-only precheck. Only structured SQL state `23505` and named
+constraint `uq_users_canonical_email` map to generic **409 `CONFLICT`**, after
+transaction rollback. Other persistence failures remain safe internal errors.
+Passwords and hashes never appear in responses or service logs; PostgreSQL's
+failing-row diagnostic detail remains disabled. Do not enable SQL bind-value or
+raw HTTP body DEBUG/TRACE logging for credential traffic.
+
+### CSRF bootstrap without authentication sessions
+
+GET **`/api/v1/auth/csrf`** returns `{headerName, token}` with `no-store`. Retain
+its masked token in memory, send it as `X-CSRF-TOKEN`, and include cookies in the
+registration request (`credentials: 'include'` for cross-origin development).
+Use the same hostname for Vite and the backend locally (both `localhost`, or both
+`127.0.0.1`) so SameSite=Lax cookies remain usable across their different ports.
+Spring's `CookieCsrfTokenRepository` plus `XorCsrfTokenRequestAttributeHandler`
+provide deferred tokens and BREACH masking. The cookie is HttpOnly, SameSite=Lax,
+Path=/, with no Domain: `loyalty-csrf` locally and Secure `__Host-loyalty-csrf`
+in production. It is solely a CSRF cookie, not a login/session token. A missing
+or invalid token returns `403 FORBIDDEN`; CSRF is not disabled or exempted for
+registration. The request cache is disabled to avoid anonymous authentication
+sessions. No login/logout/current-user route is opened.
+
+### Registration attempt limit and staged delivery
+
+Registration allows **ten attempts/hour/IP** in a sliding window, after CSRF
+validation and before DTO processing/hash work. The eleventh returns
+`429 RATE_LIMITED` with `Retry-After`. It uses the servlet's remote address and
+does not parse caller-supplied forwarding headers. The in-memory map expires
+old entries and caps tracked addresses at 10,000, failing closed at capacity.
+This is a per-instance limiter for the modular monolith: restarts reset it;
+a multi-instance deployment needs a shared/gateway budget. Configure trusted
+proxy address handling deliberately before deployment. No login limiter/workflow
+is implemented in this issue.
+
+**Loyalty account creation is deliberately deferred to P4.** The full architecture
+requires registration to initialize loyalty/streak/game state eventually, but
+those models do not exist yet and the Issue #13 instructions explicitly prohibit
+inventing them. This phase commits identity + profile only. P4 must extend the
+same atomic boundary and provision existing registered profiles before relying
+on those aggregates. No loyalty tables or new Flyway migration are added here;
+V1/V2 remain unchanged. Issue #13 records this scope deferral explicitly.
+
+Tests cover registration API/service validation, case-variant duplicates,
+concurrent uniqueness, CUSTOMER/ACTIVE/profile defaults, hashes/salts/Unicode,
+rollback after real user/grant SQL inserts, safe errors/logs, privilege-field
+rejection, real CSRF cookie round trips, production cookie attributes, unrelated
+route protection and the registration rate limit.
+
+```sh
+./mvnw -B -ntp -Dtest=RegistrationTests,RegistrationCsrfTests,ProductionCsrfTests,PasswordSecurityTests,RegistrationRateLimiterTests test
+./mvnw -B -ntp clean verify
+```
 
 ## CORS and frontend connectivity
 
@@ -330,7 +431,7 @@ messages or rejected values; custom constraints receive `INVALID_VALUE`.
 
 Modules can throw `new ResourceNotFoundException()` or `new ConflictException()`.
 These intentionally accept no caller-supplied message. Authentication/access-denied
-exceptions are sanitized too; auth workflows remain unimplemented. Never turn
+exceptions are sanitized too; login remains unimplemented. Never turn
 arbitrary database exceptions into business conflicts: unexpected persistence
 failures remain generic `500` errors. Add explicit safe domain codes only with
 the later feature's documented contract. Preserve `Allow`/`Retry-After` headers
@@ -340,7 +441,7 @@ when provided by MVC.
 Security errors use the same DTO via `ApiErrorWriter` because they occur before
 MVC advice. Boot's fallback error settings also disable exception/message/trace
 exposure. MVC and security tests use controllers available only on the test
-classpath; the packaged application has no product controllers.
+classpath; registration is the only implemented product endpoint.
 
 ```sh
 ./mvnw -B -ntp -Dtest=ApiErrorTests test
