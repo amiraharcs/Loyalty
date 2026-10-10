@@ -31,10 +31,10 @@ class MigrationTests {
     }
 
     @Test
-    void migratesEmptyDatabaseWithoutDomainTablesAndCanRunAgain() throws Exception {
+    void migratesEmptyDatabaseWithOnlyIdentityTablesAndCanRunAgain() throws Exception {
         withEmptyDatabase(url -> {
             var flyway = flyway(url);
-            assertThat(flyway.migrate().migrationsExecuted).isEqualTo(1);
+            assertThat(flyway.migrate().migrationsExecuted).isEqualTo(2);
             flyway.validate();
             assertThat(flyway.migrate().migrationsExecuted).isZero();
             try (var connection = DriverManager.getConnection(url,
@@ -42,9 +42,9 @@ class MigrationTests {
                  var statement = connection.createStatement();
                  var tables = statement.executeQuery("SELECT table_name FROM information_schema.tables "
                          + "WHERE table_schema = 'loyalty' ORDER BY table_name")) {
-                assertThat(tables.next()).isTrue();
-                assertThat(tables.getString(1)).isEqualTo("flyway_schema_history");
-                assertThat(tables.next()).isFalse();
+                var names = new java.util.ArrayList<String>();
+                while (tables.next()) { names.add(tables.getString(1)); }
+                assertThat(names).containsExactly("customer_profiles", "flyway_schema_history", "roles", "user_roles", "users");
             }
             assertThatThrownBy(flyway::clean).isInstanceOf(FlywayException.class).hasMessageContaining("cleanDisabled");
         });
