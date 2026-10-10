@@ -1,165 +1,108 @@
-# Loyalty backend foundation
+# Loyalty backend
 
-Java 21 + Spring Boot 4.1.1, built with Maven as one executable application.
-This is the foundation for [Issue #8](https://github.com/amiraharcs/Loyalty/issues/8),
-not an implementation of the product APIs.
+Java 21, Spring Boot 4.1.1 and Maven. Issues #8–#9 establish a modular monolith
+with PostgreSQL and Flyway. No business APIs or domain tables are implemented.
+[P1 architecture](../docs/architecture/README.md) remains the source of truth.
 
-The [P1 architecture documents](../docs/architecture/README.md) remain the source
-of truth for domain ownership, business rules, API conventions and security.
-The existing React frontend is a separate project and is unchanged here.
+## Local development
 
-## Requirements and setup
-
-- Install a JDK **21** and point `JAVA_HOME` to its JDK home, not its `bin` folder.
-- Use the checked-in Maven Wrapper; it pins Maven **3.10.0**. A globally installed
-  Maven is not required. The first run downloads Maven and dependencies.
-- No database, Docker, environment secrets or demo accounts are needed for this issue.
-
-Check your Java installation:
-
-```sh
-java -version
-```
-
-On macOS with an installed Java 21 JDK:
-
-```sh
-export JAVA_HOME=$(/usr/libexec/java_home -v 21)
-export PATH="$JAVA_HOME/bin:$PATH"
-```
-
+Install JDK 21 and Docker with Compose. Set `JAVA_HOME` to the JDK home.
 From the repository root:
 
 ```sh
 cd backend
-./mvnw -version
-./mvnw -B -ntp clean verify
+cp .env.example .env
+# Edit .env if needed; these credentials are for local development only.
+docker compose up -d --wait
+set -a
+. ./.env
+set +a
 ./mvnw spring-boot:run
 ```
 
-On Windows use `mvnw.cmd` in place of `./mvnw`. The wrapper download and normal
-Maven cache live in the user's Maven directory, outside the source tree.
+Compose reads `.env` automatically; Spring Boot does not. Export its variables
+as above before starting Java. Keep `.env` out of Git. The Maven wrapper pins
+Maven 3.10.0; Windows users can use `mvnw.cmd` and set equivalent environment
+variables in their shell.
 
-## Configuration and profiles
+The default `dev` profile binds HTTP to `127.0.0.1:8080`. PostgreSQL 17 binds
+only to `127.0.0.1:5432`, has a health check, and stores data in the Compose
+project's `postgres_data` volume. `DB_PORT` changes the host database port;
+`PORT` changes the HTTP port. There is no embedded database fallback.
+If port 5432 is already occupied, set `DB_PORT=55432` in `.env` before starting
+Compose, and export that same value when starting the application.
 
-| File | Responsibility |
-| --- | --- |
-| `src/main/resources/application.yaml` | Application name, default profile, `PORT`, and explicit foundation-only auto-configuration exclusions. |
-| `src/main/resources/application-dev.yaml` | Local loopback binding and normal INFO logging. |
-| `src/main/resources/application-prod.yaml` | Production profile, INFO logging and graceful shutdown with a 20-second deadline. |
+## Database configuration
 
-`dev` is the default. The local server binds to `127.0.0.1:8080`. Set `PORT` to
-change the port; do not commit machine-specific values or secrets.
+| Variable | Development | Production |
+| --- | --- | --- |
+| `DB_URL` | Optional JDBC URL override | Required `jdbc:postgresql://host:port/database` |
+| `DB_HOST` / `DB_PORT` / `DB_NAME` | `127.0.0.1` / `5432` / `loyalty_dev` | Use `DB_URL` |
+| `DB_USERNAME` | `loyalty_dev` | Required, no default |
+| `DB_PASSWORD` | `local_dev_only` | Required, no default |
+| `DB_POOL_SIZE` | 10 | 10, tune for deployment connection limits |
+| `DB_SSL_MODE` | Dev connections disable TLS | `verify-full` by default |
+| `DB_MIGRATION_URL` / `DB_MIGRATION_USERNAME` / `DB_MIGRATION_PASSWORD` | Not used | Optional separate migration connection; supply all three together |
 
-```sh
-PORT=8081 ./mvnw spring-boot:run
-```
+Activate production using `SPRING_PROFILES_ACTIVE=prod`. Supply credentials via
+deployment environment/secret storage, never source control or Vite variables.
+Missing/blank settings and non-PostgreSQL URLs fail before datasource creation.
+Unreachable databases, bad credentials, TLS errors and migration errors fail
+startup. Connection establishment is bounded; no application starts without its
+database. Production TLS requires a trusted server certificate and a hostname
+matching it; configure the PostgreSQL client's trust store/root certificate for
+your hosting provider. Do not disable TLS for deployed databases.
 
-Select production explicitly rather than relying on the development default:
+Provision the production database before application startup. Where supported,
+use a migration account that owns the `loyalty` schema and can create objects,
+and a separate least-privilege runtime account with `CONNECT` and schema `USAGE`.
+Grant only the domain table/sequence privileges required by later features, and
+configure default privileges for objects created by the migration owner. The
+local Compose account intentionally serves both purposes for development.
+Do not point migration and runtime URLs at different databases.
 
 ```sh
 ./mvnw -B -ntp clean verify
+# With production settings already supplied by the deployment environment:
 java -jar target/loyalty-backend-0.0.1-SNAPSHOT.jar --spring.profiles.active=prod
 ```
 
-`SPRING_PROFILES_ACTIVE=prod` is also supported. Production uses the server's
-normal bind address rather than the dev loopback restriction. These configuration
-files establish a profile structure; they are not a complete production deployment.
+## Schema ownership and migrations
 
-## Foundation behaviour and scope
+Flyway runs automatically at startup **before JPA**. The existing Boot Flyway
+starter and `flyway-database-postgresql` runtime module provide PostgreSQL
+support. All profiles use:
 
-The application starts an embedded servlet server but defines **no business
-controllers, entities, repositories, services or API routes**.
+- Dedicated `loyalty` schema, created by Flyway, with its schema history there.
+- `classpath:db/migration`, checksum validation, and no automatic baselining.
+- Flyway clean disabled, SQL initialization disabled.
+- Hibernate `ddl-auto=validate`, with no automatic creation/update of tables.
+- JPA open-in-view disabled and JDBC timestamps in UTC.
 
-Spring Security has a minimal closed policy: every request is denied. Form login,
-HTTP Basic and logout handling are disabled, the generated default user is
-suppressed, and CSRF protection remains enabled. A request to `/`, `/login` or an
-unimplemented API path receives `403`; this is expected, not a startup failure.
-There are no credentials to try. Real authentication/session and role checks
-belong to P3, following the architecture docs.
+`V1__initialize_persistence.sql` documents the schema and revokes public CREATE
+on it. It creates no domain tables. The only foundation table is Flyway's own
+schema history. Add future immutable migrations as `V2__description.sql`, etc.;
+never edit a migration that has already run. A nonempty unmanaged `loyalty`
+schema fails migration rather than being silently adopted.
 
-Persistence libraries are prepared, but these auto-configurations are excluded
-in **both profiles** until Issue #9:
+## Stop or reset local PostgreSQL
 
-- `DataSourceAutoConfiguration`
-- `HibernateJpaAutoConfiguration`
-- `FlywayAutoConfiguration`
-
-No PostgreSQL connection, schema, migration, embedded database or fake datasource
-is created. Issue #9 must remove these three exclusions and add environment-based
-database configuration, Flyway migrations and real PostgreSQL migration tests.
-The generated-user exclusion is separate and should be revisited with P3, not
-removed as part of database setup.
-
-Actuator is present as a dependency but its endpoint access is disabled. CORS,
-health exposure, database health and operational access policy belong to Issue #11.
-The foundation does not implement the API error contract from Issue #10.
-
-No business features, payment processing or stored-value functionality are added.
-
-## Package structure
-
-The root application package is `com.amiraharcs.loyalty`, so Spring's component
-scan covers all of its future modules. Each empty boundary is represented by a
-small `package-info.java`, not dummy controllers, services or entities.
-
-```text
-com.amiraharcs.loyalty
-├── LoyaltyBackendApplication
-├── auth
-├── customer
-├── loyalty
-├── visit
-├── store
-├── reward
-├── qr
-├── game
-├── leaderboard
-├── competition
-├── admin
-├── audit
-└── common
-    └── config
-        └── FoundationSecurityConfiguration
+```sh
+# Preserve data:
+docker compose down
 ```
 
-These packages refine the logical P1 modules without changing their ownership:
+Changing `POSTGRES_*` settings does not update credentials in an initialized
+volume. To change those settings, alter the local database deliberately or reset
+it. The following permanently deletes **this Compose project's local data**.
+Use it only for disposable development data; back up anything you need first,
+and never run it against production:
 
-| P1 boundary | Java packages |
-| --- | --- |
-| Identity | `auth`, `customer` |
-| Stores | `store` |
-| Loyalty | `loyalty`, `visit` |
-| Rewards | `reward` |
-| QR | `qr` |
-| Game | `game` |
-| Competition | `leaderboard`, `competition` |
-| Audit | `audit` |
-| Administrative coordination / technical infrastructure | `admin`, `common` |
-
-`admin` will orchestrate authorised domain services; it must not become a second
-owner of their entities. Keep domain rules out of `common`. Introduce internal
-subpackages only when real types require them. Package boundaries are currently
-documented conventions; no Spring Modulith or automatic boundary-enforcement
-library is introduced in this issue.
-
-## Dependencies
-
-Spring Boot's parent manages compatible dependency and plugin versions:
-
-- `spring-boot-starter-webmvc`: servlet/MVC infrastructure and embedded Tomcat.
-- `spring-boot-starter-data-jpa`: JPA infrastructure prepared for Issue #9.
-- `spring-boot-starter-validation`: Jakarta Bean Validation.
-- `spring-boot-starter-security`: the closed foundation filter chain.
-- PostgreSQL JDBC driver: runtime dependency for the future database connection.
-- `spring-boot-starter-flyway` and `flyway-database-postgresql`: migration
-  infrastructure and PostgreSQL support, currently inactive.
-- `spring-boot-starter-actuator`: operational infrastructure, currently unexposed.
-- Test-scope Spring Boot Test, Web MVC Test and Security Test starters: JUnit,
-  assertions, application-context tests, MockMvc and CSRF request support.
-
-There is no session JDBC, OAuth/JWT, OpenAPI, Lombok, in-memory database, business
-library or test database container added ahead of its implementation issue.
+```sh
+docker compose down --volumes
+docker compose up -d --wait
+# Start the application again to recreate the schema via Flyway.
+```
 
 ## Checks
 
@@ -167,18 +110,31 @@ library or test database container added ahead of its implementation issue.
 ./mvnw -B -ntp clean verify
 ```
 
-The test suite exercises both the default development profile and explicit
-production profile. It verifies context/validation startup, absence of datasource,
-JPA factory and Flyway beans, no generated user, a closed HTTP surface even with
-a valid CSRF token, no login redirect/Basic challenge, and profile-specific
-settings. It does not test business rules that have not been implemented.
+Docker must be running. Testcontainers creates an isolated PostgreSQL 17 instance
+on a random port, independent of your Compose database, and cleans it up when
+the test JVM ends. Tests never reset the development database. The suite checks
+both Spring profiles, PostgreSQL connectivity, Flyway version/checksum validation,
+JPA startup without domain entities, empty-database migration, repeat migration,
+refusal of unmanaged schema/clean, and production configuration failures.
+Existing closed security and validation checks remain in place. `verify` compiles,
+tests and packages a runnable JAR.
 
-`verify` compiles Java 21 bytecode, runs the tests and packages a runnable JAR.
-Generated files and IDE/environment files are ignored by `backend/.gitignore`.
+## Structure and scope
+
+Root package: `com.amiraharcs.loyalty`. Domain boundaries remain lightweight
+`package-info.java` files: `auth`, `customer`, `loyalty`, `visit`, `store`,
+`reward`, `qr`, `game`, `leaderboard`, `competition`, `admin`, `audit`, `common`.
+`common/config` contains the foundation security policy and production database
+settings guard. No controllers, entities, repositories or business services
+are introduced. The frontend is unchanged.
+
+All HTTP requests remain denied; no generated user, form login or HTTP Basic is
+added. Actuator endpoints remain disabled. Error handling, CORS/health policy,
+authentication and domain features belong to later issues.
 
 ## References
 
-- [Spring Boot 4.1.1 system requirements](https://docs.spring.io/spring-boot/4.1/system-requirements.html)
-- [Spring Initializr](https://start.spring.io/): source of the standard Maven Wrapper scripts.
-- [P1 domain boundaries](../docs/architecture/domain-model.md)
-- [P1 security and testing plan](../docs/architecture/security-and-testing.md)
+- [Spring Boot database initialization](https://docs.spring.io/spring-boot/4.1/how-to/data-initialization.html)
+- [Testcontainers PostgreSQL](https://java.testcontainers.org/modules/databases/postgres/)
+- [Architecture domain model](../docs/architecture/domain-model.md)
+- [Architecture security and testing](../docs/architecture/security-and-testing.md)

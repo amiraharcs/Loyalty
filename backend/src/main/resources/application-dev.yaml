@@ -1,3 +1,14 @@
+spring:
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://${DB_HOST:127.0.0.1}:${DB_PORT:5432}/${DB_NAME:loyalty_dev}}
+    username: ${DB_USERNAME:loyalty_dev}
+    password: ${DB_PASSWORD:local_dev_only}
+    hikari:
+      data-source-properties:
+        sslmode: disable
+        connectTimeout: 10
+        socketTimeout: 30
+
 server:
   address: 127.0.0.1
 

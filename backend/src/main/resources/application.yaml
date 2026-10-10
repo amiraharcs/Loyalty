@@ -4,13 +4,35 @@ spring:
   profiles:
     default: dev
   autoconfigure:
-    # Issue #9 will replace the persistence exclusions with real PostgreSQL/Flyway setup.
     # Suppress the generated development user; real authentication belongs to P3.
     exclude:
-      - org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration
-      - org.springframework.boot.hibernate.autoconfigure.HibernateJpaAutoConfiguration
-      - org.springframework.boot.flyway.autoconfigure.FlywayAutoConfiguration
       - org.springframework.boot.security.autoconfigure.UserDetailsServiceAutoConfiguration
+
+  datasource:
+    hikari:
+      connection-timeout: 10000
+      initialization-fail-timeout: 1
+      maximum-pool-size: ${DB_POOL_SIZE:10}
+      schema: loyalty
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate.default_schema: loyalty
+      hibernate.jdbc.time_zone: UTC
+  sql:
+    init:
+      mode: never
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    default-schema: loyalty
+    schemas: loyalty
+    create-schemas: true
+    baseline-on-migrate: false
+    clean-disabled: true
+    validate-on-migrate: true
 
 server:
   port: ${PORT:8080}

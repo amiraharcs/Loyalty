@@ -2,6 +2,23 @@ server:
   shutdown: graceful
 
 spring:
+  datasource:
+    url: ${DB_URL:}
+    username: ${DB_USERNAME:}
+    password: ${DB_PASSWORD:}
+    hikari:
+      data-source-properties:
+        sslmode: ${DB_SSL_MODE:verify-full}
+        connectTimeout: 10
+        socketTimeout: 30
+  flyway:
+    url: ${DB_MIGRATION_URL:${DB_URL:}}
+    user: ${DB_MIGRATION_USERNAME:${DB_USERNAME:}}
+    password: ${DB_MIGRATION_PASSWORD:${DB_PASSWORD:}}
+    jdbc-properties:
+      sslmode: ${DB_SSL_MODE:verify-full}
+      connectTimeout: 10
+      socketTimeout: 30
   lifecycle:
     timeout-per-shutdown-phase: 20s
 

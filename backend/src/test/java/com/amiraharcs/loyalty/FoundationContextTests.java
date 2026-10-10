@@ -11,6 +11,8 @@ import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.test.web.servlet.MockMvc;
 
 import javax.sql.DataSource;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
@@ -21,6 +23,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 /** Run the same foundation contract under each supported configuration profile. */
 abstract class FoundationContextTests {
+
+    @DynamicPropertySource
+    static void databaseProperties(DynamicPropertyRegistry registry) {
+        PostgresTestDatabase.register(registry);
+    }
 
     @Autowired
     ApplicationContext context;
@@ -39,10 +46,19 @@ abstract class FoundationContextTests {
     }
 
     @Test
-    void doesNotStartPersistenceBeforeIssueNine() {
-        assertThat(context.getBeansOfType(DataSource.class)).isEmpty();
-        assertThat(context.getBeansOfType(EntityManagerFactory.class)).isEmpty();
-        assertThat(context.getBeansOfType(Flyway.class)).isEmpty();
+    void startsPostgresFlywayAndJpaWithoutDomainEntities() throws Exception {
+        try (var connection = context.getBean(DataSource.class).getConnection()) {
+            assertThat(connection.getMetaData().getDatabaseProductName()).isEqualTo("PostgreSQL");
+            assertThat(connection.getSchema()).isEqualTo("loyalty");
+        }
+        var entityManagerFactory = context.getBean(EntityManagerFactory.class);
+        assertThat(entityManagerFactory.isOpen()).isTrue();
+        assertThat(entityManagerFactory.getMetamodel().getEntities()).isEmpty();
+        var flyway = context.getBean(Flyway.class);
+        flyway.validate();
+        assertThat(flyway.info().current().getVersion().toString()).isEqualTo("1");
+        assertThat(environment.getProperty("spring.jpa.hibernate.ddl-auto")).isEqualTo("validate");
+        assertThat(environment.getProperty("spring.sql.init.mode")).isEqualTo("never");
     }
 
     @Test
