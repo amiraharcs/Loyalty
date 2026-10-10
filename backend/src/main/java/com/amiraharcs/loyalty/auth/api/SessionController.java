@@ -8,6 +8,7 @@ import java.time.Clock;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.authentication.*;
 import org.springframework.security.core.Authentication;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.web.context.SecurityContextRepository;
 import org.springframework.security.web.authentication.session.SessionAuthenticationStrategy;
@@ -51,6 +52,7 @@ public class SessionController {
     }
 
     @GetMapping("/me")
+    @PreAuthorize(RoleAuthorities.REQUIRES_AUTHENTICATION)
     public ResponseEntity<CurrentUserResponse> me(Authentication authentication) {
         var principal = (SessionPrincipal) authentication.getPrincipal();
         var identity = identities.current(principal.userId()).orElseThrow(() -> new BadCredentialsException("Authentication failed"));
