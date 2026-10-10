@@ -186,7 +186,7 @@ class RegistrationTests {
                         .content(body(email(), PASSWORD, "Member")))
                 .andExpect(status().isForbidden());
         mvc.perform(get("/api/v1/auth/me")).andExpect(status().isUnauthorized());
-        mvc.perform(post("/api/v1/auth/sessions").with(csrf())).andExpect(status().isUnauthorized());
+        mvc.perform(get("/api/v1/customers/me/profile")).andExpect(status().isUnauthorized());
     }
 
     @Test
