@@ -9,7 +9,6 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
-import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.web.context.SecurityContextRepository;
 import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
 import com.amiraharcs.loyalty.common.api.ApiErrorWriter;
@@ -49,8 +48,7 @@ public class SessionStateFilter extends OncePerRequestFilter {
             if (identity == null || !identity.passwordVersion().equals(session.getAttribute(SessionLifecycle.PASSWORD_VERSION))) {
                 lifecycle.invalidate(request, response, auth);
             } else {
-                var authorities = identity.response().roles().stream()
-                        .map(role -> new SimpleGrantedAuthority("ROLE_" + role.name())).toList();
+                var authorities = RoleAuthorities.forRoles(identity.response().roles());
                 Set<String> previous = auth.getAuthorities().stream().map(authority -> authority.getAuthority()).collect(Collectors.toSet());
                 Set<String> current = authorities.stream().map(authority -> authority.getAuthority()).collect(Collectors.toSet());
                 var refreshed = UsernamePasswordAuthenticationToken.authenticated(principal, null, authorities);

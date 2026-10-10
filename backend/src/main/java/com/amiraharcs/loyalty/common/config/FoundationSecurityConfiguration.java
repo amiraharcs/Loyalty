@@ -21,7 +21,7 @@ import org.springframework.security.web.context.SecurityContextRepository;
 import org.springframework.security.web.authentication.AnonymousAuthenticationFilter;
 import java.time.Clock;
 
-/** Explicit public registration/probe routes; all other actions remain denied until implemented. */
+/** Explicit public/auth routes and independent role boundaries; unmatched paths are denied. */
 @Configuration(proxyBeanMethods = false)
 class FoundationSecurityConfiguration {
 
@@ -48,6 +48,9 @@ class FoundationSecurityConfiguration {
                                 "/actuator/health/readiness").permitAll()
                         .requestMatchers(HttpMethod.HEAD, "/actuator/health", "/actuator/health/liveness",
                                 "/actuator/health/readiness").permitAll()
+                        .requestMatchers("/api/v1/customers/**").hasAuthority(RoleAuthorities.CUSTOMER)
+                        .requestMatchers("/api/v1/staff/**").hasAuthority(RoleAuthorities.STAFF)
+                        .requestMatchers("/api/v1/admin/**").hasAuthority(RoleAuthorities.ADMIN)
                         .anyRequest().denyAll())
                 .exceptionHandling(exceptions -> exceptions
                         .authenticationEntryPoint((request, response, exception) ->

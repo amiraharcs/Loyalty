@@ -6,7 +6,6 @@ import com.amiraharcs.loyalty.auth.service.LoginRateLimiter;
 import java.util.UUID;
 import org.springframework.security.authentication.*;
 import org.springframework.security.core.Authentication;
-import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Component;
 
@@ -44,7 +43,7 @@ public class DatabaseAuthenticationProvider implements AuthenticationProvider {
         if (!version.equals(current.passwordVersion())) { throw denied(); }
         limiter.succeeded(attempt);
         var authenticated = UsernamePasswordAuthenticationToken.authenticated(new SessionPrincipal(credentials.id()), null,
-                current.response().roles().stream().map(role -> new SimpleGrantedAuthority("ROLE_" + role.name())).toList());
+                RoleAuthorities.forRoles(current.response().roles()));
         authenticated.setDetails(new VerifiedPasswordVersion(version));
         return authenticated;
     }
