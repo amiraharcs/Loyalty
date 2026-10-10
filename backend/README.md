@@ -1,6 +1,6 @@
 # Loyalty backend
 
-Java 21, Spring Boot 4.1.1 and Maven. Issues #8–#9 establish a modular monolith
+Java 21, Spring Boot 4.1.1 and Maven. Issues #8–#10 establish a modular monolith
 with PostgreSQL and Flyway. No business APIs or domain tables are implemented.
 [P1 architecture](../docs/architecture/README.md) remains the source of truth.
 
@@ -128,9 +128,76 @@ Root package: `com.amiraharcs.loyalty`. Domain boundaries remain lightweight
 settings guard. No controllers, entities, repositories or business services
 are introduced. The frontend is unchanged.
 
-All HTTP requests remain denied; no generated user, form login or HTTP Basic is
-added. Actuator endpoints remain disabled. Error handling, CORS/health policy,
-authentication and domain features belong to later issues.
+All HTTP requests remain denied (anonymous callers receive `401`; authenticated
+callers and CSRF failures receive `403`); no generated user, form login or HTTP Basic is
+added. Actuator endpoints remain disabled. CORS/health policy, authentication
+and domain features belong to later issues.
+
+## Shared API errors and request validation
+
+`common/api` implements the [agreed error contract](../docs/architecture/api-conventions.md#standard-error-representation).
+Errors use `application/problem+json` and `Cache-Control: no-store`:
+
+```json
+{
+  "type": "urn:loyalty:problem:validation-error",
+  "title": "Validation error",
+  "status": 400,
+  "detail": "Request validation failed.",
+  "instance": "/api/v1/example",
+  "code": "VALIDATION_ERROR",
+  "requestId": "1d39f019-a033-42a4-96e2-f7ceab1479d0",
+  "fieldErrors": [{"field": "email", "code": "INVALID_FORMAT", "message": "Enter a valid value."}]
+}
+```
+
+The example illustrates the contract; no example/product endpoint is registered.
+`fieldErrors` is omitted when empty. `instance` contains the path without query
+parameters. The architecture does not require a timestamp, so none is added.
+A filter generates a UUID, replaces any incoming `X-Request-ID`, returns it on
+success and error responses, and scopes it to logging MDC for the request.
+Unexpected failures log the ID and exception type, without exception messages,
+SQL, rejected values or stack traces. Keep framework request/body DEBUG/TRACE
+logging disabled when handling real secrets or personal information.
+
+| HTTP | Stable code | Trigger |
+| --- | --- | --- |
+| 400 | `VALIDATION_ERROR` | DTO constraints, missing parameters, invalid parameter types/ranges |
+| 400 | `MALFORMED_REQUEST` | Missing/malformed JSON, invalid body types, unknown JSON fields |
+| 401 | `UNAUTHENTICATED` | Security entry point or authentication exception |
+| 403 | `FORBIDDEN` | CSRF, permission denial or access-denied exception |
+| 404 | `RESOURCE_NOT_FOUND` | Missing route/resource or `ResourceNotFoundException` |
+| 409 | `CONFLICT` | Explicit `ConflictException` for a valid request conflicting with state |
+| 405 / 406 / 415 | `METHOD_NOT_ALLOWED` / `NOT_ACCEPTABLE` / `UNSUPPORTED_MEDIA_TYPE` | MVC protocol failures |
+| 413 / 429 / 503 | `PAYLOAD_TOO_LARGE` / `RATE_LIMITED` / `SERVICE_UNAVAILABLE` | Framework status exceptions; no limiter/dependency policy added |
+| 500 | `INTERNAL_ERROR` | Unexpected exception or invalid server return value |
+
+Future controllers should bind request DTOs using `@Valid @RequestBody`, apply
+constraints such as `@NotBlank`, `@Email`, `@Size`, `@NotNull` and `@Positive`, and
+use MVC's native parameter validation (constraints directly on parameters;
+avoid class-level `@Validated` on controllers). Jackson rejects unknown fields.
+Use boxed required numeric fields with `@NotNull` to distinguish missing values.
+Field messages come from a safe shared mapping, not interpolated validator
+messages or rejected values; custom constraints receive `INVALID_VALUE`.
+
+Modules can throw `new ResourceNotFoundException()` or `new ConflictException()`.
+These intentionally accept no caller-supplied message. Authentication/access-denied
+exceptions are sanitized too; auth workflows remain unimplemented. Never turn
+arbitrary database exceptions into business conflicts: unexpected persistence
+failures remain generic `500` errors. Add explicit safe domain codes only with
+the later feature's documented contract. Preserve `Allow`/`Retry-After` headers
+when provided by MVC.
+
+`ApiExceptionHandler` extends Spring MVC's `ResponseEntityExceptionHandler`.
+Security errors use the same DTO via `ApiErrorWriter` because they occur before
+MVC advice. Boot's fallback error settings also disable exception/message/trace
+exposure. MVC and security tests use controllers available only on the test
+classpath; the packaged application has no product controllers.
+
+```sh
+./mvnw -B -ntp -Dtest=ApiErrorTests test
+./mvnw -B -ntp clean verify
+```
 
 ## References
 

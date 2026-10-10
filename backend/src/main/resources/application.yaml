@@ -8,6 +8,15 @@ spring:
     exclude:
       - org.springframework.boot.security.autoconfigure.UserDetailsServiceAutoConfiguration
 
+  web:
+    error:
+      include-message: never
+      include-binding-errors: never
+      include-stacktrace: never
+      include-exception: false
+  jackson:
+    deserialization:
+      fail-on-unknown-properties: true
   datasource:
     hikari:
       connection-timeout: 10000
@@ -36,6 +45,10 @@ spring:
 
 server:
   port: ${PORT:8080}
+
+logging:
+  pattern:
+    correlation: "[requestId=%X{requestId:-}] "
 
 management:
   endpoints:

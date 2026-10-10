@@ -9,16 +9,20 @@ import org.springframework.context.ApplicationContext;
 import org.springframework.core.env.Environment;
 import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.test.web.servlet.MockMvc;
-
-import javax.sql.DataSource;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.http.MediaType;
+
+import javax.sql.DataSource;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /** Run the same foundation contract under each supported configuration profile. */
@@ -69,21 +73,39 @@ abstract class FoundationContextTests {
     @Test
     void rejectsRequestsWithoutAddingLoginOrBasicAuthentication() throws Exception {
         mvc.perform(get("/api/v1/not-implemented"))
-                .andExpect(status().isForbidden())
+                .andExpect(status().isUnauthorized())
                 .andExpect(header().doesNotExist("WWW-Authenticate"))
-                .andExpect(header().doesNotExist("Location"));
-        mvc.perform(get("/login")).andExpect(status().isForbidden());
+                .andExpect(header().doesNotExist("Location"))
+                .andExpect(content().contentType(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(jsonPath("code").value("UNAUTHENTICATED"));
+        mvc.perform(get("/login")).andExpect(status().isUnauthorized());
     }
 
     @Test
     void rejectsMutationsEvenWithAValidCsrfToken() throws Exception {
         mvc.perform(post("/api/v1/not-implemented").with(csrf()))
-                .andExpect(status().isForbidden());
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void authenticatedDenialsUseForbiddenProblemJson() throws Exception {
+        mvc.perform(get("/api/v1/not-implemented").with(user("fixture").roles("CUSTOMER")))
+                .andExpect(status().isForbidden())
+                .andExpect(content().contentType(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(jsonPath("code").value("FORBIDDEN"));
+    }
+
+    @Test
+    void missingCsrfUsesForbiddenProblemJson() throws Exception {
+        mvc.perform(post("/api/v1/not-implemented"))
+                .andExpect(status().isForbidden())
+                .andExpect(content().contentType(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(jsonPath("code").value("FORBIDDEN"));
     }
 
     @Test
     void doesNotExposeActuatorYet() throws Exception {
         assertThat(environment.getProperty("management.endpoints.access.default")).isEqualTo("none");
-        mvc.perform(get("/actuator/health")).andExpect(status().isForbidden());
+        mvc.perform(get("/actuator/health")).andExpect(status().isUnauthorized());
     }
 }
