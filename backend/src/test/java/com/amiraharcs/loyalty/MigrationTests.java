@@ -31,10 +31,10 @@ class MigrationTests {
     }
 
     @Test
-    void migratesEmptyDatabaseWithOnlyIdentityTablesAndCanRunAgain() throws Exception {
+    void migratesEmptyDatabaseWithOnlyIdentityAndSessionTablesAndCanRunAgain() throws Exception {
         withEmptyDatabase(url -> {
             var flyway = flyway(url);
-            assertThat(flyway.migrate().migrationsExecuted).isEqualTo(2);
+            assertThat(flyway.migrate().migrationsExecuted).isEqualTo(3);
             flyway.validate();
             assertThat(flyway.migrate().migrationsExecuted).isZero();
             try (var connection = DriverManager.getConnection(url,
@@ -44,7 +44,7 @@ class MigrationTests {
                          + "WHERE table_schema = 'loyalty' ORDER BY table_name")) {
                 var names = new java.util.ArrayList<String>();
                 while (tables.next()) { names.add(tables.getString(1)); }
-                assertThat(names).containsExactly("customer_profiles", "flyway_schema_history", "roles", "user_roles", "users");
+                assertThat(names).containsExactly("customer_profiles", "flyway_schema_history", "roles", "spring_session", "spring_session_attributes", "user_roles", "users");
             }
             assertThatThrownBy(flyway::clean).isInstanceOf(FlywayException.class).hasMessageContaining("cleanDisabled");
         });

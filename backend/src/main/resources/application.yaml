@@ -4,10 +4,15 @@ spring:
   profiles:
     default: dev
   autoconfigure:
-    # Suppress the generated development user; real authentication belongs to P3.
+    # Authentication uses our database provider, never a generated development user.
     exclude:
       - org.springframework.boot.security.autoconfigure.UserDetailsServiceAutoConfiguration
 
+  session:
+    timeout: 30m
+    jdbc:
+      initialize-schema: never
+      table-name: loyalty.spring_session
   web:
     error:
       include-message: never
@@ -47,9 +52,15 @@ spring:
     validate-on-migrate: true
 
 server:
+  # Do not let caller-supplied proxy headers change the login throttle address.
+  forward-headers-strategy: none
   port: ${PORT:8080}
 
 logging:
+  level:
+    org.springframework.session: INFO
+    org.springframework.security: INFO
+    org.hibernate.orm.jdbc.bind: "OFF"
   pattern:
     correlation: "[requestId=%X{requestId:-}] "
 
