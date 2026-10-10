@@ -100,6 +100,28 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
         return response(code, List.of(), headers, request);
     }
 
+    @ExceptionHandler(jakarta.validation.ConstraintViolationException.class)
+    ResponseEntity<Object> serviceValidation(jakarta.validation.ConstraintViolationException exception, WebRequest request) {
+        boolean invalidReturn = exception.getConstraintViolations().stream().anyMatch(violation -> {
+            for (var node : violation.getPropertyPath()) {
+                if (node.getKind() == jakarta.validation.ElementKind.RETURN_VALUE) { return true; }
+            }
+            return false;
+        });
+        if (invalidReturn) {
+            logFailure(exception, request);
+            return response(ApiErrorCode.INTERNAL_ERROR, List.of(), HttpHeaders.EMPTY, request);
+        }
+        var fields = exception.getConstraintViolations().stream().map(violation -> {
+            String field = "request";
+            for (var node : violation.getPropertyPath()) {
+                if (node.getName() != null) { field = node.getName(); }
+            }
+            return fieldError(field, violation.getConstraintDescriptor().getAnnotation().annotationType().getSimpleName());
+        }).toList();
+        return response(ApiErrorCode.VALIDATION_ERROR, fields, HttpHeaders.EMPTY, request);
+    }
+
     @ExceptionHandler(ResourceNotFoundException.class)
     ResponseEntity<Object> notFound(ResourceNotFoundException exception, WebRequest request) {
         return response(ApiErrorCode.RESOURCE_NOT_FOUND, List.of(), HttpHeaders.EMPTY, request);
@@ -148,6 +170,7 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
         return switch (constraint == null ? "" : constraint) {
             case "NotBlank", "NotNull", "NotEmpty" -> new ApiError.FieldError(field, "REQUIRED", "This field is required.");
             case "Email", "Pattern" -> new ApiError.FieldError(field, "INVALID_FORMAT", "Enter a valid value.");
+            case "SecurePassword" -> new ApiError.FieldError(field, "INVALID_PASSWORD", "Use a permitted password of 15 to 128 characters.");
             case "Size", "Length" -> new ApiError.FieldError(field, "INVALID_SIZE", "The length or size is invalid.");
             case "Positive", "PositiveOrZero", "Negative", "NegativeOrZero", "Min", "Max", "DecimalMin", "DecimalMax" ->
                     new ApiError.FieldError(field, "OUT_OF_RANGE", "The value is outside the allowed range.");
