@@ -1,0 +1,22 @@
+spring:
+  application:
+    name: loyalty-backend
+  profiles:
+    default: dev
+  autoconfigure:
+    # Issue #9 will replace the persistence exclusions with real PostgreSQL/Flyway setup.
+    # Suppress the generated development user; real authentication belongs to P3.
+    exclude:
+      - org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration
+      - org.springframework.boot.hibernate.autoconfigure.HibernateJpaAutoConfiguration
+      - org.springframework.boot.flyway.autoconfigure.FlywayAutoConfiguration
+      - org.springframework.boot.security.autoconfigure.UserDetailsServiceAutoConfiguration
+
+server:
+  port: ${PORT:8080}
+
+management:
+  endpoints:
+    access:
+      # Actuator is on the classpath only; endpoint/health policy belongs to Issue #11.
+      default: none
