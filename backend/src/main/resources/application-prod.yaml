@@ -20,6 +20,7 @@ spring:
     user: ${DB_MIGRATION_USERNAME:${DB_USERNAME:}}
     password: ${DB_MIGRATION_PASSWORD:${DB_PASSWORD:}}
     jdbc-properties:
+      logServerErrorDetail: false
       sslmode: ${DB_SSL_MODE:verify-full}
       connectTimeout: 10
       socketTimeout: 30

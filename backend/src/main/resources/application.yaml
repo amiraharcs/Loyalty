@@ -23,6 +23,9 @@ spring:
       initialization-fail-timeout: 1
       maximum-pool-size: ${DB_POOL_SIZE:10}
       schema: loyalty
+      data-source-properties:
+        # PostgreSQL error DETAIL can include complete credential-bearing rows.
+        logServerErrorDetail: false
   jpa:
     open-in-view: false
     hibernate:

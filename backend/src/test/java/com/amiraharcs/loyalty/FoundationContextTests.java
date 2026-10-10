@@ -51,14 +51,15 @@ abstract class FoundationContextTests {
     }
 
     @Test
-    void startsPostgresFlywayAndJpaWithoutDomainEntities() throws Exception {
+    void startsPostgresFlywayAndValidatesIdentityEntities() throws Exception {
         try (var connection = context.getBean(DataSource.class).getConnection()) {
             assertThat(connection.getMetaData().getDatabaseProductName()).isEqualTo("PostgreSQL");
             assertThat(connection.getSchema()).isEqualTo("loyalty");
         }
         var entityManagerFactory = context.getBean(EntityManagerFactory.class);
         assertThat(entityManagerFactory.isOpen()).isTrue();
-        assertThat(entityManagerFactory.getMetamodel().getEntities()).isEmpty();
+        assertThat(entityManagerFactory.getMetamodel().getEntities()).extracting(jakarta.persistence.metamodel.EntityType::getName)
+                .containsExactlyInAnyOrder("User", "Role", "CustomerProfile");
         var flyway = context.getBean(Flyway.class);
         flyway.validate();
         assertThat(flyway.info().current().getVersion().toString()).isEqualTo("2");
