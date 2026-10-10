@@ -1,8 +1,8 @@
 # Loyalty backend
 
 Java 21, Spring Boot 4.1.1 and Maven. Issues #8–#11 establish a modular monolith
-with PostgreSQL and Flyway. Issues #12–#14 add identity persistence, customer
-registration and server-side authentication sessions. Other product APIs remain
+with PostgreSQL and Flyway. Issues #12–#15 add identity persistence, customer
+registration, server-side authentication sessions and explicit role enforcement. Other product APIs remain
 unimplemented.
 [P1 architecture](../docs/architecture/README.md) remains the source of truth.
 
@@ -138,10 +138,11 @@ rate limiting lives in `common/security`. The frontend is unchanged.
 Safe health reads, valid API CORS preflights, GET `/api/v1/auth/csrf`, and
 CSRF-protected POST `/api/v1/auth/registrations` and `/api/v1/auth/sessions`,
 and DELETE `/api/v1/auth/sessions/current` are public. GET `/api/v1/auth/me`
-requires an active authenticated session. All other routes remain denied
-(anonymous callers receive `401`; authenticated callers and CSRF failures
-receive `403`). No generated user, HTML login, HTTP Basic, or role hierarchy is
-added. Domain permissions belong to Issue #15 and later features.
+requires an active authenticated session. Customer, staff and admin namespaces
+require their independent explicit grants, as described below. Unmatched routes
+remain denied (anonymous callers receive `401`; authenticated callers and CSRF
+failures receive `403`). No generated user, HTML login, HTTP Basic, or role
+hierarchy is added. Resource-specific permissions belong to later features.
 
 ## Identity persistence (Issue #12)
 
@@ -401,6 +402,78 @@ budgets, configuration bounds and concurrent reservations.
 
 ```sh
 ./mvnw -B -ntp -Dtest=AuthenticatedSessionTests,ProductionSessionTests,LoginRateLimiterTests test
+./mvnw -B -ntp clean verify
+```
+
+## Explicit role authorisation (Issue #15)
+
+Roles are **independent explicit grants**, not a hierarchy. ADMIN alone cannot
+scan as STAFF or use CUSTOMER gameplay/loyalty APIs; STAFF alone cannot use
+CUSTOMER or ADMIN actions. Multiple-role users receive exactly the permissions
+of their granted roles. No SYSTEM user role, new role-management endpoint or
+business API is introduced.
+
+| Route namespace | Required authority |
+| --- | --- |
+| `/api/v1/customers/**` | `ROLE_CUSTOMER` |
+| `/api/v1/staff/**` | `ROLE_STAFF` |
+| `/api/v1/admin/**` | `ROLE_ADMIN` |
+
+These boundaries apply to all HTTP methods after the existing explicit
+public/auth/health rules. CSRF remains required for unsafe requests, including
+future role-protected mutations. Valid CORS preflight is not permission to run
+the corresponding operation. All unmatched namespaces still use `denyAll()`;
+no authenticated/permitAll catch-all exists. Missing handlers inside a matched
+namespace require the role first, then return the safe `404 RESOURCE_NOT_FOUND`
+contract. Shared catalogue/leaderboard namespaces remain denied until their
+later issues define action-specific rules.
+
+`RoleAuthorities` centralizes authority names, enum-to-authority conversion, and
+compile-time `REQUIRES_CUSTOMER`, `REQUIRES_STAFF`, `REQUIRES_ADMIN` and
+`REQUIRES_AUTHENTICATION` expressions. Both login and the per-request database
+refresh use this mapping. Use `hasAuthority` through these constants instead of
+reimplementing ROLE_ prefix rules or adding a role hierarchy.
+
+`MethodSecurityConfiguration` enables Spring's `@EnableMethodSecurity`.
+Sensitive application-service entry points must also declare
+`@PreAuthorize(RoleAuthorities.REQUIRES_STAFF)` (or the appropriate constant),
+even if their controller URL already requires that role. Controllers may add
+method checks as an extra layer; the implemented current-user method requires
+authentication independently of its URL rule. Enabling method security does not
+protect unannotated methods automatically. The identity lookup and credential
+services remain internal collaborators needed during unauthenticated login;
+they do not publish HTTP routes.
+
+Call secured methods through **injected Spring beans**. Proxy-based method
+checks also cover direct calls to those beans from other components; manually
+constructing an object, private/final methods or self-invocation inside the same
+bean bypasses the proxy. Keep sensitive entry points public and non-final and
+cross the bean boundary instead of relying on an internal call to run security.
+See [Spring method security](https://docs.spring.io/spring-security/reference/servlet/authorization/method-security.html).
+
+Current database account state and grants remain authoritative on every
+session-authenticated HTTP request. Removed roles take effect before URL/method
+authorisation and rotate the session ID; new grants become usable without
+re-login. Disabled accounts invalidate their session on next use and receive
+`401`. A missing/expired session receives JSON `401 UNAUTHENTICATED`; an active
+caller lacking a required grant receives `403 FORBIDDEN`, using the existing
+RFC 9457 contract without HTML redirects or internal details. CSRF failures
+remain `403`. Method annotations consume that refreshed security context; they
+are not a substitute for resource ownership, active store assignment, business
+conditions or transactional checks. Those checks must be implemented with their
+future domain services, not guessed during P3.
+
+`RoleAuthorizationTests` uses real Argon2id login, CSRF cookies and PostgreSQL
+sessions with test-only controller/service beans. It verifies the independent
+role matrix at URL and directly invoked method levels, combined/no grants,
+role additions/removals, disabled accounts, method denial behind an allowed
+URL, safe errors, unmatched paths, CSRF and auth/logout continuity.
+`RoleAuthoritiesTests` verifies one authority per explicit grant and no implicit
+permissions. No database migration, frontend change or P4 business feature is
+needed for this issue.
+
+```sh
+./mvnw -B -ntp -Dtest=RoleAuthorizationTests,RoleAuthoritiesTests test
 ./mvnw -B -ntp clean verify
 ```
 
