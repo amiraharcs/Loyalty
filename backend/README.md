@@ -2,8 +2,9 @@
 
 Java 21, Spring Boot 4.1.1 and Maven. Issues #8–#11 establish a modular monolith
 with PostgreSQL and Flyway. Issues #12–#15 add identity persistence, customer
-registration, server-side authentication sessions and explicit role enforcement. Other product APIs remain
-unimplemented.
+registration, server-side authentication sessions and explicit role enforcement.
+Issue #16 adds store persistence and staff-store scope services.
+Other product APIs remain unimplemented.
 [P1 architecture](../docs/architecture/README.md) remains the source of truth.
 
 ## Local development
@@ -129,7 +130,9 @@ Root package: `com.amiraharcs.loyalty`. Domain boundaries remain lightweight
 `reward`, `qr`, `game`, `leaderboard`, `competition`, `admin`, `audit`, `common`.
 `common/config` contains the foundation security policy and production database
 settings guard. Identity entities/repositories live under `auth/model`,
-`auth/repository`, `customer/model` and `customer/repository`. Other domain
+`auth/repository`, `customer/model` and `customer/repository`. Store entities,
+repositories and scope services live
+under `store/model`, `store/repository` and `store/service`. Other domain
 boundaries remain package placeholders. Registration DTOs/controllers, validation and services live under `auth/api`,
 `auth/validation`, `auth/service`, with password/session configuration in
 `auth/config` and authentication infrastructure in `auth/security`. Shared
@@ -200,7 +203,7 @@ trips, role/profile relationships, statuses/timestamps, case-variant duplicates,
 required fields, FK/key/deletion constraints, non-cascading persistence/removal,
 and hash safety. The migration tests verify all migrations from an empty database,
 repeat migration and checksum protection. Both application profiles validate
-all three entity mappings at startup. Issue #12 seeds no users or credentials. Registration is added by Issue #13;
+all implemented entity mappings at startup. Issue #12 seeds no users or credentials. Registration is added by Issue #13;
 login is added by Issue #14.
 
 ## Customer registration and password security (Issue #13)
@@ -474,6 +477,109 @@ needed for this issue.
 
 ```sh
 ./mvnw -B -ntp -Dtest=RoleAuthorizationTests,RoleAuthoritiesTests test
+./mvnw -B -ntp clean verify
+```
+
+## Stores and staff-store scope (Issue #16)
+
+`V4__create_stores_and_staff_assignments.sql` adds **`loyalty.stores`** and
+**`loyalty.staff_store`**. V1/V2/V3 remain unchanged. Flyway owns the migration;
+Hibernate still validates rather than creating or altering tables. V4 upgrades
+an existing V3 database without modifying identity/session data or seeding users,
+stores, assignments or customer activity.
+
+- `Store`: generated UUID, required name/address, ACTIVE/INACTIVE status, and UTC
+  created/updated instants. Name is bounded to 200 characters, address to 500;
+  both are plain strings because no structured postal model is specified.
+  These bounds and status values are implementation choices consistent with
+  the architecture. No opening hours, configuration, payment data or speculative
+  metadata is added. `setStatus` changes availability while preserving the ID
+  and creation timestamp; backwards timestamps are rejected.
+- `StaffStore`: composite `(staffUserId, storeId)` primary key, active boolean,
+  required original `assignedBy` User, original `assignedAt`, and `updatedAt`.
+  Lazy references link an existing User and Store without ORM cascades. The
+  original assignment actor/time are immutable through the model. Deactivation
+  and explicit reactivation update the same retained row and its update time;
+  future management/audit workflows must record each changing actor/reason.
+  `Persistable` lifecycle callbacks distinguish new composite-key entities,
+  preventing a new object from silently merging/reactivating an existing pair.
+
+All three assignment foreign keys (staff user, store, assigning user) use
+**ON DELETE RESTRICT / ON UPDATE RESTRICT**, including inactive assignments.
+The pair primary key enforces uniqueness and supports assignment lookup.
+A partial staff/store index covers active assignments; additional store/assigner
+indexes support restrictive reference checks. Stores have a status/name/ID
+index for active catalogue lookup/order. SQL checks enforce status, required
+nonblank text and timestamp ordering. No repository exposes a delete method:
+normal removal of access means deactivation, preserving historical references.
+
+`StoreRepository` exposes save, ID lookup, ID+status lookup and status-filtered
+name/ID ordering. `StaffStoreRepository` exposes save, natural-key lookup,
+active-assignment store lookup and active-assignment store listing filtered by
+store status. The latter queries constrain assignment and store state together.
+Repositories are persistence collaborators, not authorization entry points;
+other modules should call the services instead of bypassing them.
+
+`StoreService.requireActive(storeId)` provides a safe `{id, name, address}`
+`StoreSummary`, or generic `404 RESOURCE_NOT_FOUND` for an absent/inactive store.
+`activeStores()` returns the same projection in stable name/ID order. Both
+require an authenticated Spring security context. They validate store
+availability, **not staff permission**.
+
+For scanning, visit confirmation, reward fulfilment or staff customer service,
+call **`StaffStoreScopeService.requireAssignedStore(storeId)`** through an
+injected Spring bean. It derives the actor from the existing `SessionPrincipal`;
+there is no caller-supplied staff ID or effective role. It requires all of:
+
+1. Explicit STAFF authority through method-level `@PreAuthorize`.
+2. A currently ACTIVE database identity still explicitly granted STAFF, using
+   the existing identity service rather than a separate identity implementation.
+3. An active assignment for that actor and target store, with an ACTIVE store.
+
+`assignedActiveStores()` applies the same role/account checks before returning
+only the caller's currently active scope. CUSTOMER or ADMIN with an assignment
+row still receives `403 FORBIDDEN`; ADMIN+STAFF succeeds because STAFF was
+explicitly granted. An assignment never grants a role. Missing/disabled
+identity is `401`; inactive/unassigned/missing stores share the safe `404`
+contract, without assignment metadata. An authenticated HTTP request also keeps
+all existing session/account/role/expiry checks and the independent STAFF URL
+boundary. The helper rechecks database roles even during a direct bean call.
+
+Assignments are read from PostgreSQL for each operation, not cached in the
+session. Assignment deactivation or store deactivation blocks the next use,
+while preserving both records; reactivation makes an eligible assignment usable
+again. Revoking a store assignment does not sign the user out or remove STAFF
+at other stores. Account disablement and role revocation remain separate
+identity controls.
+
+These helpers establish the scope boundary, not a reusable authorization token
+or a guarantee that a future mutation cannot race with deactivation. Future
+business services must call the helper **inside their operation transaction**
+and apply the operation's resource ownership, store/assignment locking and
+business conditions before committing. No visit, QR, reward, loyalty account,
+points, streak, game or leaderboard workflow is implemented here.
+
+**No first store is seeded:** the architecture provides no real production shop
+name/address. Disposable test fixtures supply stores instead; an authorized
+future management/operator workflow must provision real data. No credentials,
+staff/admin users or demo activity are seeded. **No StaffProfile is added:**
+staff identity basics are represented by User + explicit roles + StaffStore;
+the architecture defines no distinct staff-only profile fields.
+
+No public store catalogue/management CRUD, assignment management API, staff
+lookup endpoint or staff dashboard is opened. Existing deny-by-default routes
+remain in place; later feature issues must explicitly expose their endpoints.
+
+Tests cover mappings, composite keys, constrained/ordered queries, lifecycle
+metadata, required fields/status/times, all restrictive FKs, no cascade deletes
+or persistence of unsaved parents, current assigned scope, independent roles,
+direct method checks, safe errors, actor spoofing, assignment/store revocation,
+disabled accounts and database role revocation. Migration tests verify empty
+V4 setup and V3-to-V4 upgrade without invented data. Both profiles validate
+Store and StaffStore mappings.
+
+```sh
+./mvnw -B -ntp -Dtest=StorePersistenceTests,StaffStoreAuthorizationTests,StoreModelTests,MigrationTests test
 ./mvnw -B -ntp clean verify
 ```
 
