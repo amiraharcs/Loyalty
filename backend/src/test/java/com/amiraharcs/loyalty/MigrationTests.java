@@ -31,10 +31,10 @@ class MigrationTests {
     }
 
     @Test
-    void migratesEmptyDatabaseWithOnlyIdentityAndSessionTablesAndCanRunAgain() throws Exception {
+    void migratesEmptyDatabaseWithOnlyImplementedDomainAndSessionTablesAndCanRunAgain() throws Exception {
         withEmptyDatabase(url -> {
             var flyway = flyway(url);
-            assertThat(flyway.migrate().migrationsExecuted).isEqualTo(3);
+            assertThat(flyway.migrate().migrationsExecuted).isEqualTo(4);
             flyway.validate();
             assertThat(flyway.migrate().migrationsExecuted).isZero();
             try (var connection = DriverManager.getConnection(url,
@@ -44,9 +44,40 @@ class MigrationTests {
                          + "WHERE table_schema = 'loyalty' ORDER BY table_name")) {
                 var names = new java.util.ArrayList<String>();
                 while (tables.next()) { names.add(tables.getString(1)); }
-                assertThat(names).containsExactly("customer_profiles", "flyway_schema_history", "roles", "spring_session", "spring_session_attributes", "user_roles", "users");
+                assertThat(names).containsExactly("customer_profiles", "flyway_schema_history", "roles", "spring_session", "spring_session_attributes", "staff_store", "stores", "user_roles", "users");
             }
             assertThatThrownBy(flyway::clean).isInstanceOf(FlywayException.class).hasMessageContaining("cleanDisabled");
+        });
+    }
+
+    @Test
+    void upgradesVersionThreeWithoutChangingIdentityDataOrSeedingStores() throws Exception {
+        withEmptyDatabase(url -> {
+            var old = Flyway.configure().dataSource(url, PostgresTestDatabase.DATABASE.getUsername(),
+                    PostgresTestDatabase.DATABASE.getPassword()).schemas("loyalty").defaultSchema("loyalty")
+                    .locations("classpath:db/migration").target("3").load();
+            assertThat(old.migrate().migrationsExecuted).isEqualTo(3);
+            UUID identity = UUID.randomUUID();
+            try (var connection = DriverManager.getConnection(url,
+                    PostgresTestDatabase.DATABASE.getUsername(), PostgresTestDatabase.DATABASE.getPassword());
+                 var insert = connection.prepareStatement("INSERT INTO loyalty.users "
+                         + "(id, canonical_email, password_hash, status, created_at, updated_at) "
+                         + "VALUES (?, 'migration-preserved@example.org', 'synthetic-hash', 'ACTIVE', now(), now())")) {
+                insert.setObject(1, identity);
+                insert.executeUpdate();
+            }
+            assertThat(flyway(url).migrate().migrationsExecuted).isEqualTo(1);
+            try (var connection = DriverManager.getConnection(url,
+                    PostgresTestDatabase.DATABASE.getUsername(), PostgresTestDatabase.DATABASE.getPassword());
+                 var statement = connection.createStatement();
+                 var counts = statement.executeQuery("SELECT (SELECT count(*) FROM loyalty.users) AS users, "
+                         + "(SELECT count(*) FROM loyalty.stores) AS stores, "
+                         + "(SELECT count(*) FROM loyalty.staff_store) AS assignments")) {
+                assertThat(counts.next()).isTrue();
+                assertThat(counts.getInt("users")).isEqualTo(1);
+                assertThat(counts.getInt("stores")).isZero();
+                assertThat(counts.getInt("assignments")).isZero();
+            }
         });
     }
 
