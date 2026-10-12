@@ -1,5 +1,5 @@
 /**
- * Loyalty accounts, immutable point transactions and streak projections.
- * <p>Reserved package boundary; business types are added in later issues.</p>
+ * Loyalty account locking and immutable integer-point history.
+ * Future visit, reward and adjustment services append records within authorized transactions.
  */
 package com.amiraharcs.loyalty.loyalty;
