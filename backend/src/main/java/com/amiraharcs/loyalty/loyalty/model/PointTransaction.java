@@ -1,6 +1,7 @@
 package com.amiraharcs.loyalty.loyalty.model;
 
 import com.amiraharcs.loyalty.auth.model.User;
+import com.amiraharcs.loyalty.visit.model.Visit;
 import jakarta.persistence.*;
 import java.time.Instant;
 import java.util.Objects;
@@ -29,9 +30,18 @@ public class PointTransaction {
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "visit_id", updatable = false)
+    private Visit visit;
+
     protected PointTransaction() { }
     public PointTransaction(LoyaltyAccount account, long signedAmount, PointTransactionType type,
             User actor, String reason, Instant createdAt) {
+        this(account, signedAmount, type, actor, reason, createdAt, null);
+    }
+
+    private PointTransaction(LoyaltyAccount account, long signedAmount, PointTransactionType type,
+            User actor, String reason, Instant createdAt, Visit visit) {
         this.account = Objects.requireNonNull(account);
         this.signedAmount = PointValues.amount(signedAmount);
         this.type = Objects.requireNonNull(type);
@@ -44,9 +54,22 @@ public class PointTransaction {
                 || type == PointTransactionType.ADJUSTMENT && (actor == null || reason == null)) {
             throw new IllegalArgumentException("Adjustment requires an actor and a nonempty reason");
         }
+        if (type == PointTransactionType.EARN && (visit == null || actor == null)
+                || type != PointTransactionType.EARN && visit != null) {
+            throw new IllegalArgumentException("EARN requires its visit and confirming actor");
+        }
+        this.visit = visit;
         this.actor = actor;
         this.reason = reason;
     }
+    /** Every earning field comes from the persisted immutable visit, never a client amount. */
+    public static PointTransaction forVisit(Visit visit) {
+        Objects.requireNonNull(visit);
+        if (visit.getId() == null) { throw new IllegalArgumentException("Visit must be persisted before earning points"); }
+        return new PointTransaction(visit.getAccount(), visit.getEarnedPoints(), PointTransactionType.EARN,
+                visit.getConfirmedBy(), null, visit.getConfirmedAt(), visit);
+    }
+    public Visit getVisit() { return visit; }
     public UUID getId() { return id; }
     public LoyaltyAccount getAccount() { return account; }
     public long getSignedAmount() { return signedAmount; }

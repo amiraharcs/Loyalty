@@ -92,3 +92,7 @@ management:
   health:
     db:
       enabled: true
+
+loyalty:
+  visits:
+    points-per-visit: ${POINTS_PER_VISIT:100}

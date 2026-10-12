@@ -18,16 +18,23 @@ import static org.mockito.Mockito.doReturn;
 
 @Transactional
 class VisitServiceTests extends VisitTestSupport {
+    private void noAward(Setup setup) {
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM loyalty.visits WHERE customer_id=?", Long.class, setup.customer().getId())).isZero();
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM loyalty.point_transactions WHERE account_id=?", Long.class, setup.account().getId())).isZero();
+    }
+
     @Test
-    void trustedConfirmationCreatesVisitWithCurrentStaffAndNoLedgerMutation() {
+    void trustedConfirmationCreatesVisitAndMatchingEarnWithCurrentStaff() {
         var setup = fixture(); authenticate(setup.staff(), RoleCode.STAFF);
         var result = service.confirmResolvedCustomer(setup.customer().getId(), setup.store().getId());
-        var visit = visits.findById(result.id()).orElseThrow();
+        var visit = visits.findById(result.visitId()).orElseThrow();
         assertThat(visit.getConfirmedBy().getId()).isEqualTo(setup.staff().getId());
         assertThat(visit.getAccount().getId()).isEqualTo(setup.account().getId());
         assertThat(result.confirmedAt()).isEqualTo(NOW);
-        assertThat(loyalty.currentBalance(setup.customer().getId())).isZero();
-        assertThat(jdbc.queryForObject("SELECT count(*) FROM loyalty.point_transactions WHERE account_id = ?", Long.class, setup.account().getId())).isZero();
+        assertThat(result.earnedPoints()).isEqualTo(100);
+        assertThat(result.balance()).isEqualTo(100);
+        assertThat(loyalty.currentBalance(setup.customer().getId())).isEqualTo(100);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM loyalty.point_transactions WHERE account_id = ?", Long.class, setup.account().getId())).isEqualTo(1);
     }
 
     @Test
@@ -52,6 +59,7 @@ class VisitServiceTests extends VisitTestSupport {
         var setup = fixture(); var actor = user(RoleCode.valueOf(role)); var store = assignedStore(actor, StoreStatus.ACTIVE);
         authenticate(actor, RoleCode.valueOf(role));
         assertThatThrownBy(() -> service.confirmResolvedCustomer(setup.customer().getId(), store.getId())).isInstanceOf(AccessDeniedException.class);
+        noAward(setup);
     }
 
     @Test
@@ -60,6 +68,7 @@ class VisitServiceTests extends VisitTestSupport {
         jdbc.update("DELETE FROM loyalty.user_roles WHERE user_id = ? AND role_code = 'STAFF'", setup.staff().getId()); entities.clear();
         authenticate(setup.staff(), RoleCode.STAFF);
         assertThatThrownBy(() -> service.confirmResolvedCustomer(setup.customer().getId(), setup.store().getId())).isInstanceOf(AccessDeniedException.class);
+        noAward(setup);
     }
 
     @Test
@@ -67,6 +76,7 @@ class VisitServiceTests extends VisitTestSupport {
         var setup = fixture(); entities.flush(); jdbc.update("UPDATE loyalty.users SET status='DISABLED' WHERE id=?", setup.staff().getId()); entities.clear();
         authenticate(setup.staff(), RoleCode.STAFF);
         assertThatThrownBy(() -> service.confirmResolvedCustomer(setup.customer().getId(), setup.store().getId())).isInstanceOf(BadCredentialsException.class);
+        noAward(setup);
     }
 
     @Test
@@ -74,6 +84,7 @@ class VisitServiceTests extends VisitTestSupport {
         var setup = fixture(); entities.flush(); jdbc.update("UPDATE loyalty.users SET status='DISABLED' WHERE id=?", setup.customer().getUser().getId()); entities.clear();
         authenticate(setup.staff(), RoleCode.STAFF);
         assertThatThrownBy(() -> service.confirmResolvedCustomer(setup.customer().getId(), setup.store().getId())).isInstanceOf(ResourceNotFoundException.class);
+        noAward(setup);
     }
 
     @Test
@@ -81,12 +92,14 @@ class VisitServiceTests extends VisitTestSupport {
         var setup = fixture(); entities.flush(); jdbc.update("DELETE FROM loyalty.user_roles WHERE user_id=?", setup.customer().getUser().getId()); entities.clear();
         authenticate(setup.staff(), RoleCode.STAFF);
         assertThatThrownBy(() -> service.confirmResolvedCustomer(setup.customer().getId(), setup.store().getId())).isInstanceOf(ResourceNotFoundException.class);
+        noAward(setup);
     }
 
     @Test
     void inactiveStoreCannotQualify() {
         var setup = fixture(); var inactive = assignedStore(setup.staff(), StoreStatus.INACTIVE); authenticate(setup.staff(), RoleCode.STAFF);
         assertThatThrownBy(() -> service.confirmResolvedCustomer(setup.customer().getId(), inactive.getId())).isInstanceOf(ResourceNotFoundException.class);
+        noAward(setup);
     }
 
     @Test
@@ -94,12 +107,14 @@ class VisitServiceTests extends VisitTestSupport {
         var setup = fixture(); entities.flush(); jdbc.update("UPDATE loyalty.staff_store SET active=false WHERE store_id=?", setup.store().getId()); entities.clear();
         authenticate(setup.staff(), RoleCode.STAFF);
         assertThatThrownBy(() -> service.confirmResolvedCustomer(setup.customer().getId(), setup.store().getId())).isInstanceOf(ResourceNotFoundException.class);
+        noAward(setup);
     }
 
     @Test
     void unassignedStaffCannotBorrowAnotherStaffScope() {
         var setup = fixture(); var other = user(RoleCode.STAFF); authenticate(other, RoleCode.STAFF);
         assertThatThrownBy(() -> service.confirmResolvedCustomer(setup.customer().getId(), setup.store().getId())).isInstanceOf(ResourceNotFoundException.class);
+        noAward(setup);
     }
 
     @Test
@@ -107,6 +122,7 @@ class VisitServiceTests extends VisitTestSupport {
         var setup = fixture(); entities.flush(); jdbc.update("DELETE FROM loyalty.loyalty_accounts WHERE id=?", setup.account().getId()); entities.clear();
         authenticate(setup.staff(), RoleCode.STAFF);
         assertThatThrownBy(() -> service.confirmResolvedCustomer(setup.customer().getId(), setup.store().getId())).isInstanceOf(ResourceNotFoundException.class);
+        noAward(setup);
     }
 
     @Test
@@ -117,6 +133,7 @@ class VisitServiceTests extends VisitTestSupport {
         var store = assignedStore(actor, StoreStatus.ACTIVE); entities.flush(); entities.clear();
         authenticate(actor, RoleCode.CUSTOMER, RoleCode.STAFF);
         assertThatThrownBy(() -> service.confirmResolvedCustomer(setup.customer().getId(), store.getId())).isInstanceOf(AccessDeniedException.class);
+        noAward(setup);
     }
 
     @ParameterizedTest

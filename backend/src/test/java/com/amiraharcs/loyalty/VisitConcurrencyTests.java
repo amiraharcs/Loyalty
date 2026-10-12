@@ -3,6 +3,7 @@ package com.amiraharcs.loyalty;
 import com.amiraharcs.loyalty.auth.model.RoleCode;
 import com.amiraharcs.loyalty.store.model.StoreStatus;
 import com.amiraharcs.loyalty.visit.model.Visit;
+import com.amiraharcs.loyalty.loyalty.model.PointTransaction;
 import com.amiraharcs.loyalty.visit.service.VisitAlreadyRecordedException;
 import java.util.List;
 import java.util.UUID;
@@ -44,8 +45,8 @@ class VisitConcurrencyTests extends VisitTestSupport {
             assertThat(List.of(first.get(15, TimeUnit.SECONDS), second.get(15, TimeUnit.SECONDS))).containsExactlyInAnyOrder(true, false);
         }
         assertThat(service.history(setup.customer().getId(), 0, 10).getTotalElements()).isEqualTo(1);
-        assertThat(loyalty.currentBalance(setup.customer().getId())).isZero();
-        assertThat(jdbc.queryForObject("SELECT count(*) FROM loyalty.point_transactions WHERE account_id = ?", Long.class, setup.account().getId())).isZero();
+        assertThat(loyalty.currentBalance(setup.customer().getId())).isEqualTo(100);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM loyalty.point_transactions WHERE account_id = ?", Long.class, setup.account().getId())).isEqualTo(1);
     }
 
     @Test
@@ -59,7 +60,8 @@ class VisitConcurrencyTests extends VisitTestSupport {
                         // Both transactions genuinely observe no visit before racing their INSERTs.
                         assertThat(visits.existsByCustomerIdAndBusinessDate(setup.customer().getId(), Visit.businessDateAt(NOW))).isFalse();
                         ready.countDown(); await(ready);
-                        visits.append(new Visit(setup.customer(), setup.account(), setup.store(), setup.staff(), NOW));
+                        var visit = visits.append(new Visit(setup.customer(), setup.account(), setup.store(), setup.staff(), NOW, 100));
+                        ledger.append(PointTransaction.forVisit(visit));
                     });
                     return true;
                 } catch (DataIntegrityViolationException duplicate) { return false; }

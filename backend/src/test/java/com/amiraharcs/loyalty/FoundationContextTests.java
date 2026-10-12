@@ -62,7 +62,7 @@ abstract class FoundationContextTests {
                 .containsExactlyInAnyOrder("User", "Role", "CustomerProfile", "Store", "StaffStore", "LoyaltyAccount", "PointTransaction", "Visit");
         var flyway = context.getBean(Flyway.class);
         flyway.validate();
-        assertThat(flyway.info().current().getVersion().toString()).isEqualTo("6");
+        assertThat(flyway.info().current().getVersion().toString()).isEqualTo("7");
         assertThat(environment.getProperty("spring.jpa.hibernate.ddl-auto")).isEqualTo("validate");
         assertThat(environment.getProperty("spring.sql.init.mode")).isEqualTo("never");
     }

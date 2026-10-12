@@ -1,6 +1,7 @@
 package com.amiraharcs.loyalty;
 
 import com.amiraharcs.loyalty.store.model.StoreStatus;
+import com.amiraharcs.loyalty.loyalty.model.PointTransaction;
 import com.amiraharcs.loyalty.visit.model.Visit;
 import com.amiraharcs.loyalty.visit.repository.VisitRepository;
 import java.time.*;
@@ -15,7 +16,7 @@ import static org.assertj.core.api.Assertions.*;
 
 @Transactional
 class VisitPersistenceTests extends VisitTestSupport {
-    private static final String INSERT = "INSERT INTO loyalty.visits(id,customer_id,account_id,store_id,confirmed_by,business_date,confirmed_at) VALUES (?,?,?,?,?,?,?)";
+    private static final String INSERT = "INSERT INTO loyalty.visits(id,customer_id,account_id,store_id,confirmed_by,business_date,confirmed_at,earned_points) VALUES (?,?,?,?,?,?,?,100)";
     private void integrity(String sql, Object... args) {
         assertThatThrownBy(() -> jdbc.update(sql, args)).isInstanceOf(DataIntegrityViolationException.class);
     }
@@ -25,7 +26,7 @@ class VisitPersistenceTests extends VisitTestSupport {
     }
 
     @Test
-    void mapsAllRelationshipsAndServerTimestampWithoutPointsOrExtraCreationTime() {
+    void mapsAllRelationshipsAndServerTimestampWithAwardSnapshotWithoutExtraCreationTime() {
         var setup = fixture(); var visit = append(setup, NOW); entities.clear();
         var loaded = visits.findById(visit.getId()).orElseThrow();
         assertThat(loaded.getCustomer().getId()).isEqualTo(setup.customer().getId());
@@ -36,7 +37,8 @@ class VisitPersistenceTests extends VisitTestSupport {
         assertThat(loaded.getBusinessDate()).isEqualTo(LocalDate.of(2026, 10, 12));
         assertThat(visits.existsByCustomerIdAndBusinessDate(setup.customer().getId(), loaded.getBusinessDate())).isTrue();
         assertThat(visits.findByCustomerIdAndBusinessDate(setup.customer().getId(), loaded.getBusinessDate())).isPresent();
-        assertThat(loyalty.currentBalance(setup.customer().getId())).isZero();
+        assertThat(loaded.getEarnedPoints()).isEqualTo(100);
+        assertThat(loyalty.currentBalance(setup.customer().getId())).isEqualTo(100);
     }
 
     @Test
@@ -50,7 +52,8 @@ class VisitPersistenceTests extends VisitTestSupport {
     @Test
     void differentCustomersCanQualifyOnSameDate() {
         var setup = fixture(); var other = customer(); append(setup, NOW);
-        var second = visits.append(new Visit(other.getCustomer(), other, setup.store(), setup.staff(), NOW));
+        var second = visits.append(new Visit(other.getCustomer(), other, setup.store(), setup.staff(), NOW, 100));
+        ledger.append(PointTransaction.forVisit(second));
         assertThat(second.getBusinessDate()).isEqualTo(LocalDate.of(2026, 10, 12));
         assertThat(second.getCustomer().getId()).isNotEqualTo(setup.customer().getId());
     }
@@ -58,7 +61,7 @@ class VisitPersistenceTests extends VisitTestSupport {
     @Test
     void databaseAndModelRejectCrossCustomerAccountCombination() {
         var setup = fixture(); var other = customer(); entities.flush();
-        assertThatThrownBy(() -> new Visit(setup.customer(), other, setup.store(), setup.staff(), NOW)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new Visit(setup.customer(), other, setup.store(), setup.staff(), NOW, 100)).isInstanceOf(IllegalArgumentException.class);
         var args = values(setup); args[2] = other.getId(); integrity(INSERT, args);
     }
 
@@ -107,7 +110,7 @@ class VisitPersistenceTests extends VisitTestSupport {
     }
 
     @Test
-    void rejectsTruncationIncludingCascade() { append(fixture(), NOW); integrity("TRUNCATE loyalty.visits CASCADE"); }
+    void rejectsTruncationIncludingCascade() { append(fixture(), NOW); jdbc.execute("SET CONSTRAINTS visit_requires_earn IMMEDIATE"); integrity("TRUNCATE loyalty.visits CASCADE"); }
 
     @Test
     void hibernateDoesNotRewriteLoadedVisitAndRepositoryExposesNoMutation() throws Exception {

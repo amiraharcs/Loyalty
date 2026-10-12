@@ -161,7 +161,7 @@ class StaffStoreAuthorizationTests {
         String token = json.readTree(csrf.getResponse().getContentAsString()).get("token").asText();
         browser.send(post("/api/v1/staff/visits").header("X-CSRF-TOKEN", token).contentType("application/json")
                 .content(json.writeValueAsString(Map.of("customerId", UUID.randomUUID(), "storeId", store.getId(),
-                        "businessDate", "2050-01-01", "confirmedAt", "2050-01-01T00:00:00Z", "timezone", "Pacific/Auckland"))), 404);
+                        "businessDate", "2050-01-01", "confirmedAt", "2050-01-01T00:00:00Z", "timezone", "Pacific/Auckland", "earnedPoints", 999999, "points", 999999))), 404);
         assertThat(jdbc.queryForObject("SELECT count(*) FROM loyalty.visits", Long.class)).isEqualTo(before);
     }
 

@@ -92,7 +92,7 @@ class LoyaltyConcurrencyTests {
     void concurrentAppendCannotCommitAnUnsafeTotal(int isolation) throws Exception {
         UUID customer = customer();
         new TransactionTemplate(manager).executeWithoutResult(status -> ledger.append(new PointTransaction(
-                service.lockForMutation(customer), PointValues.MAX_SAFE_INTEGER - 1, PointTransactionType.EARN, null, null, Instant.now())));
+                service.lockForMutation(customer), PointValues.MAX_SAFE_INTEGER - 1, PointTransactionType.REFUND, null, null, Instant.now())));
         var start = new CountDownLatch(1); var readers = new CountDownLatch(2);
         try (var workers = Executors.newFixedThreadPool(2)) {
             Callable<Boolean> append = () -> {
@@ -103,7 +103,7 @@ class LoyaltyConcurrencyTests {
                     transaction.executeWithoutResult(status -> {
                         var account = service.resolve(customer);
                         readers.countDown(); await(readers);
-                        ledger.append(new PointTransaction(account, 1, PointTransactionType.EARN, null, null, Instant.now()));
+                        ledger.append(new PointTransaction(account, 1, PointTransactionType.REFUND, null, null, Instant.now()));
                     });
                     return true;
                 } catch (org.springframework.dao.DataIntegrityViolationException

@@ -10,6 +10,9 @@ import com.amiraharcs.loyalty.loyalty.service.LoyaltyAccountService;
 import com.amiraharcs.loyalty.store.model.Store;
 import com.amiraharcs.loyalty.store.service.StaffStoreScopeService;
 import com.amiraharcs.loyalty.visit.model.Visit;
+import com.amiraharcs.loyalty.visit.config.VisitAwardRule;
+import com.amiraharcs.loyalty.loyalty.model.PointValues;
+import com.amiraharcs.loyalty.common.api.ConflictException;
 import com.amiraharcs.loyalty.visit.repository.VisitRepository;
 import jakarta.persistence.EntityManager;
 import java.time.Clock;
@@ -34,19 +37,20 @@ public class VisitService {
     private final AuthenticationIdentityService identities;
     private final EntityManager entities;
     private final Clock clock;
+    private final VisitAwardRule awards;
     public VisitService(VisitRepository visits, CustomerProfileRepository profiles, LoyaltyAccountService accounts,
-            StaffStoreScopeService scope, AuthenticationIdentityService identities, EntityManager entities, Clock clock) {
+            StaffStoreScopeService scope, AuthenticationIdentityService identities, EntityManager entities, Clock clock, VisitAwardRule awards) {
         this.visits = visits; this.profiles = profiles; this.accounts = accounts;
-        this.scope = scope; this.identities = identities; this.entities = entities; this.clock = clock;
+        this.scope = scope; this.identities = identities; this.entities = entities; this.clock = clock; this.awards = awards;
     }
 
     /**
      * Internal foundation only. A future caller must supply a trusted, staff/store-bound resolution.
-     * The caller owns the full transaction; no HTTP route may call this without atomic points/resolution integration.
+     * The caller owns the full transaction; no HTTP route may call this without trusted resolution integration.
      */
     @PreAuthorize(RoleAuthorities.REQUIRES_STAFF)
     @Transactional(propagation = Propagation.MANDATORY)
-    public VisitSummary confirmResolvedCustomer(UUID customerId, UUID storeId) {
+    public VisitConfirmationResult confirmResolvedCustomer(UUID customerId, UUID storeId) {
         scope.requireAssignedStore(storeId);
         UUID staffId = scope.currentStaffId();
         var customer = profiles.findById(customerId).orElseThrow(ResourceNotFoundException::new);
@@ -61,9 +65,15 @@ public class VisitService {
         if (visits.existsByCustomerIdAndBusinessDate(customerId, businessDate)) {
             throw new VisitAlreadyRecordedException();
         }
+        long award = awards.pointsPerVisit();
+        long previousBalance = accounts.currentBalance(customerId);
+        try { PointValues.checkedTotal(previousBalance, award); }
+        catch (IllegalStateException unsupportedTotal) { throw new ConflictException(); }
         try {
-            return VisitSummary.from(visits.append(new Visit(customer, account,
-                    entities.getReference(Store.class, storeId), entities.getReference(User.class, staffId), confirmedAt)));
+            var visit = visits.append(new Visit(customer, account,
+                    entities.getReference(Store.class, storeId), entities.getReference(User.class, staffId), confirmedAt, award));
+            long balance = accounts.recordVisitEarn(visit);
+            return new VisitConfirmationResult(visit.getId(), visit.getConfirmedAt(), visit.getBusinessDate(), visit.getEarnedPoints(), balance);
         } catch (RuntimeException exception) {
             // Only the named daily-qualification uniqueness conflict becomes the stable domain outcome.
             for (Throwable cause = exception; cause != null; cause = cause.getCause()) {

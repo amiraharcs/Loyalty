@@ -6,6 +6,8 @@ import com.amiraharcs.loyalty.auth.security.*;
 import com.amiraharcs.loyalty.customer.model.CustomerProfile;
 import com.amiraharcs.loyalty.customer.repository.CustomerProfileRepository;
 import com.amiraharcs.loyalty.loyalty.model.LoyaltyAccount;
+import com.amiraharcs.loyalty.loyalty.model.PointTransaction;
+import com.amiraharcs.loyalty.loyalty.repository.PointTransactionRepository;
 import com.amiraharcs.loyalty.loyalty.repository.LoyaltyAccountRepository;
 import com.amiraharcs.loyalty.loyalty.service.LoyaltyAccountService;
 import com.amiraharcs.loyalty.store.model.*;
@@ -42,6 +44,7 @@ abstract class VisitTestSupport {
     @Autowired StoreRepository stores;
     @Autowired StaffStoreRepository assignments;
     @MockitoSpyBean VisitRepository visits;
+    @MockitoSpyBean PointTransactionRepository ledger;
     @Autowired VisitService service;
     @Autowired EntityManager entities;
     @Autowired JdbcTemplate jdbc;
@@ -78,7 +81,9 @@ abstract class VisitTestSupport {
         SecurityContextHolder.setContext(context);
     }
     Visit append(Setup setup, Instant at) {
-        return visits.append(new Visit(setup.customer(), setup.account(), setup.store(), setup.staff(), at));
+        var visit = visits.append(new Visit(setup.customer(), setup.account(), setup.store(), setup.staff(), at, 100));
+        ledger.append(PointTransaction.forVisit(visit));
+        return visit;
     }
     record Setup(CustomerProfile customer, LoyaltyAccount account, Store store, User staff) { }
 }

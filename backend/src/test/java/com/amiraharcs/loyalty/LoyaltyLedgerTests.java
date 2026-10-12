@@ -9,6 +9,10 @@ import com.amiraharcs.loyalty.customer.repository.CustomerProfileRepository;
 import com.amiraharcs.loyalty.loyalty.model.*;
 import com.amiraharcs.loyalty.loyalty.repository.*;
 import com.amiraharcs.loyalty.loyalty.service.LoyaltyAccountService;
+import com.amiraharcs.loyalty.store.model.*;
+import com.amiraharcs.loyalty.store.repository.StoreRepository;
+import com.amiraharcs.loyalty.visit.model.Visit;
+import com.amiraharcs.loyalty.visit.repository.VisitRepository;
 import jakarta.persistence.EntityManager;
 import java.time.Instant;
 import java.util.Set;
@@ -37,6 +41,8 @@ class LoyaltyLedgerTests {
     @Autowired LoyaltyAccountService service;
     @Autowired EntityManager entities;
     @Autowired JdbcTemplate jdbc;
+    @Autowired StoreRepository stores;
+    @Autowired VisitRepository visits;
     @DynamicPropertySource
     static void database(DynamicPropertyRegistry registry) { PostgresTestDatabase.register(registry); }
 
@@ -47,6 +53,11 @@ class LoyaltyLedgerTests {
         return accounts.save(new LoyaltyAccount(profiles.save(new CustomerProfile(user(), "Member", "Member", true)), NOW));
     }
     private PointTransaction append(LoyaltyAccount account, long amount, PointTransactionType type, Instant at) {
+        if (type == PointTransactionType.EARN) {
+            var store = stores.save(new Store("Synthetic earning source", "Synthetic address", StoreStatus.ACTIVE, at));
+            var visit = visits.append(new Visit(account.getCustomer(), account, store, user(), at, amount));
+            return ledger.append(PointTransaction.forVisit(visit));
+        }
         return ledger.append(new PointTransaction(account, amount, type, null, null, at));
     }
     private void integrity(String sql, Object... args) {
@@ -116,7 +127,7 @@ class LoyaltyLedgerTests {
 
     @Test
     void rejectsMissingAccountForeignKey() {
-        integrity("INSERT INTO loyalty.point_transactions(id,account_id,signed_amount,type,created_at) VALUES (?,?,1,'EARN',now())", UUID.randomUUID(), UUID.randomUUID());
+        integrity("INSERT INTO loyalty.point_transactions(id,account_id,signed_amount,type,created_at) VALUES (?,?,1,'REFUND',now())", UUID.randomUUID(), UUID.randomUUID());
     }
 
     @Test
@@ -197,7 +208,7 @@ class LoyaltyLedgerTests {
     @Test
     void aggregateOverflowIsRejectedBeforeCommitEvenWhenEachAmountIsSafe() {
         var account = account(); append(account, PointValues.MAX_SAFE_INTEGER, PointTransactionType.EARN, NOW);
-        integrity("INSERT INTO loyalty.point_transactions(id,account_id,signed_amount,type,created_at) VALUES (?,?,1,'EARN',now())", UUID.randomUUID(), account.getId());
+        integrity("INSERT INTO loyalty.point_transactions(id,account_id,signed_amount,type,created_at) VALUES (?,?,1,'REFUND',now())", UUID.randomUUID(), account.getId());
     }
 
     @ParameterizedTest

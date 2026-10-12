@@ -3,6 +3,7 @@ package com.amiraharcs.loyalty.visit.model;
 import com.amiraharcs.loyalty.auth.model.User;
 import com.amiraharcs.loyalty.customer.model.CustomerProfile;
 import com.amiraharcs.loyalty.loyalty.model.LoyaltyAccount;
+import com.amiraharcs.loyalty.loyalty.model.PointValues;
 import com.amiraharcs.loyalty.store.model.Store;
 import jakarta.persistence.*;
 import java.time.Instant;
@@ -13,7 +14,7 @@ import java.util.Objects;
 import java.util.UUID;
 import org.hibernate.annotations.Immutable;
 
-/** Retained visit history; awarded-points snapshot/link arrive with the atomic award flow. */
+/** Immutable qualifying history with the server-owned award snapshot. */
 @Entity @Immutable
 @Table(name = "visits", schema = "loyalty")
 public class Visit {
@@ -37,8 +38,13 @@ public class Visit {
     @Column(name = "confirmed_at", nullable = false, updatable = false)
     private Instant confirmedAt;
 
+    @Column(name = "earned_points", nullable = false, updatable = false)
+    private long earnedPoints;
+
     protected Visit() { }
-    public Visit(CustomerProfile customer, LoyaltyAccount account, Store store, User confirmedBy, Instant confirmedAt) {
+    public Visit(CustomerProfile customer, LoyaltyAccount account, Store store, User confirmedBy, Instant confirmedAt, long earnedPoints) {
+        if (earnedPoints <= 0) { throw new IllegalArgumentException("Visit award must be positive"); }
+        this.earnedPoints = PointValues.amount(earnedPoints);
         this.customer = Objects.requireNonNull(customer);
         this.account = Objects.requireNonNull(account);
         this.store = Objects.requireNonNull(store);
@@ -59,5 +65,6 @@ public class Visit {
     public Store getStore() { return store; }
     public User getConfirmedBy() { return confirmedBy; }
     public LocalDate getBusinessDate() { return businessDate; }
+    public long getEarnedPoints() { return earnedPoints; }
     public Instant getConfirmedAt() { return confirmedAt; }
 }
