@@ -85,7 +85,7 @@ support. All profiles use:
 `V1__initialize_persistence.sql` documents the schema and revokes public CREATE
 on it. It creates no domain tables. V1 adds only Flyway's schema history; V2 adds
 the identity model described below. Add future immutable migrations as
-`V3__description.sql`, etc.;
+`V6__description.sql`, etc.;
 never edit a migration that has already run. A nonempty unmanaged `loyalty`
 schema fails migration rather than being silently adopted.
 
@@ -132,8 +132,10 @@ Root package: `com.amiraharcs.loyalty`. Domain boundaries remain lightweight
 settings guard. Identity entities/repositories live under `auth/model`,
 `auth/repository`, `customer/model` and `customer/repository`. Store entities,
 repositories and scope services live
-under `store/model`, `store/repository` and `store/service`. Other domain
-boundaries remain package placeholders. Registration DTOs/controllers, validation and services live under `auth/api`,
+under `store/model`, `store/repository` and `store/service`. Loyalty models,
+repositories and internal services live under `loyalty/model`,
+`loyalty/repository` and `loyalty/service`. Other domain boundaries remain
+package placeholders. Registration DTOs/controllers, validation and services live under `auth/api`,
 `auth/validation`, `auth/service`, with password/session configuration in
 `auth/config` and authentication infrastructure in `auth/security`. Shared
 rate limiting lives in `common/security`. The frontend is unchanged.
@@ -286,13 +288,12 @@ a multi-instance deployment needs a shared/gateway budget. Configure trusted
 proxy address handling deliberately before deployment. Issue #14 extends the
 same sliding-window infrastructure for login, as documented below.
 
-**Loyalty account creation is deliberately deferred to P4.** The full architecture
-requires registration to initialize loyalty/streak/game state eventually, but
-those models do not exist yet and the Issue #13 instructions explicitly prohibit
-inventing them. This phase commits identity + profile only. P4 must extend the
-same atomic boundary and provision existing registered profiles before relying
-on those aggregates. No loyalty tables or new Flyway migration are added here;
-V1/V2 remain unchanged. Issue #13 records this scope deferral explicitly.
+**Issue #17 completes the deferred loyalty-account initialization.** Registration
+now creates identity, CUSTOMER role, profile and exactly one empty LoyaltyAccount
+inside its original transaction. V5 also provisions empty accounts for existing
+profiles. There are no starter points. Streak and GameLifeState remain deferred
+to their owning issues; registration must extend the same atomic boundary when
+those aggregates exist.
 
 Tests cover registration API/service validation, case-variant duplicates,
 concurrent uniqueness, CUSTOMER/ACTIVE/profile defaults, hashes/salts/Unicode,
@@ -556,8 +557,8 @@ These helpers establish the scope boundary, not a reusable authorization token
 or a guarantee that a future mutation cannot race with deactivation. Future
 business services must call the helper **inside their operation transaction**
 and apply the operation's resource ownership, store/assignment locking and
-business conditions before committing. No visit, QR, reward, loyalty account,
-points, streak, game or leaderboard workflow is implemented here.
+business conditions before committing. No visit, QR, reward, points-award, streak, game or leaderboard workflow is
+implemented by the store scope helpers. Issue #17 adds the ledger foundation below.
 
 **No first store is seeded:** the architecture provides no real production shop
 name/address. Disposable test fixtures supply stores instead; an authorized
@@ -582,6 +583,84 @@ Store and StaffStore mappings.
 ./mvnw -B -ntp -Dtest=StorePersistenceTests,StaffStoreAuthorizationTests,StoreModelTests,MigrationTests test
 ./mvnw -B -ntp clean verify
 ```
+
+## Loyalty account and immutable point ledger (Issue #17)
+
+`V5__create_loyalty_ledger.sql` adds `loyalty_accounts` and
+`point_transactions`. V1–V4 are unchanged. Empty databases migrate through V5;
+existing V4 customer profiles receive one empty account each. Flyway remains
+the schema owner and Hibernate validates both development and production models.
+
+A `LoyaltyAccount` has a generated UUID, a unique restrictive CustomerProfile
+relationship, a BIGINT version and UTC creation time. It has **no balance field**
+and no cascading associations. The balance is always `SUM(signed_amount)` for
+that account; an empty ledger returns zero. An unknown account is not an empty
+account and raises the shared resource-not-found exception.
+
+A `PointTransaction` has a generated UUID, account, signed BIGINT amount,
+`EARN` / `REDEMPTION` / `REFUND` / `ADJUSTMENT` type, UTC creation time,
+optional restrictive actor relationship and optional reason. EARN/REFUND are
+positive, REDEMPTION negative, ADJUSTMENT either sign. Amounts cannot be zero.
+An adjustment requires an actor and a nonblank reason (maximum 1,000 characters).
+This persistence foundation does not authorize or implement an adjustment flow.
+
+Amounts and totals stay within ±9,007,199,254,740,991 for exact browser integers.
+`PointValues` uses long/BigInteger arithmetic, never floating-point or decimal
+point values. PostgreSQL widens `SUM(BIGINT)` internally without rounding;
+the read repository returns integer text and the service checks BigInteger bounds
+before projecting a long. The insert trigger updates/locks the account version and checks the
+exact total before commit, including for raw SQL and concurrent inserts. Its
+BIGINT temporary total is safe because the previous total and new amount are
+already bounded, so their sum fits BIGINT. No decimal amounts or balance columns
+are stored. `checkedTotal` is reusable for future pre-write validation.
+
+History is append-only at two layers: Hibernate `@Immutable`, fields without
+setters and a persist-only repository fragment; PostgreSQL rejects UPDATE,
+DELETE and TRUNCATE, including cascaded truncation. There is no repository merge,
+update or delete operation. Corrections must append compensating records.
+Restrictive foreign keys prevent deleting accounts/customers or attributed actors
+with retained history. Trusted database owners still control schema/trigger
+administration; the runtime role must not own schema objects or disable triggers.
+
+The history index is `(account_id, created_at DESC, id DESC)`; actor references
+also have a partial index. Internal history projections expose only entry ID,
+safe signed amount, type and time, with pages of 1–100 records. No customer-facing
+read or mutation endpoint is added. Module callers must apply caller identity,
+role, customer ownership and workflow authorization before using these helpers;
+a customer ID passed to an internal service is not an authorization decision.
+
+`lockForMutation(customerId)` requires an existing write transaction and uses
+`PESSIMISTIC_WRITE`, retaining the lock through the caller's commit/rollback.
+Future mutation services must lock **before** reading and validating balance,
+then append in that same transaction. The database insert guard also serializes
+inserts as a final range-integrity check. Every successful append advances the
+database version, so stale REPEATABLE READ/SERIALIZABLE writers fail instead of
+committing totals calculated from an old snapshot. The append repository refreshes
+a managed account after the insert. The version field also supports explicit
+force-increment locking. Future services must deliberately handle transaction
+retries; do not use version alone as a substitute for the documented account lock.
+
+There is no award/redemption/refund/admin business operation here. The foundation
+supports signed totals; future authorized workflows must enforce nonnegative
+balances, sufficient points, source eligibility, idempotency and store scope
+while holding the account lock. Visit/redemption/reversal columns are deliberately
+deferred until the owning entities exist, when new migrations must add real FKs,
+source/type and same-customer checks, unique sources and unique reversal rules.
+No placeholder source UUIDs or business entities are invented in this phase.
+
+Registration calls the loyalty module inside its original transaction: user,
+role, profile and empty account either all commit or all roll back. Duplicate
+registrations create no extra account. There are no demo or starter transactions.
+This completes the loyalty-account portion deferred in Issue #13; Streak and
+GameLifeState remain deferred. No authentication or frontend contract changes.
+
+Tests use real PostgreSQL for migrations/backfill, Hibernate mapping/validation,
+unique ownership, restrictive history FKs, SQL/ORM immutability, exact BIGINT sums,
+browser bounds, type/sign/adjustment constraints, deterministic paged ordering,
+version increments, caller-owned locks and concurrent aggregate range enforcement.
+Registration tests cover empty accounts, duplicates and rollback after an account
+INSERT has actually been flushed. Disposable test databases own fixture cleanup;
+do not try to delete or truncate ledger records to reset production history.
 
 ## CORS and frontend connectivity
 
