@@ -39,6 +39,9 @@ public class StaffStoreScopeService {
         return assignments.findAssignedStores(staffId, StoreStatus.ACTIVE).stream().map(StoreSummary::from).toList();
     }
 
+    /** Current database-verified actor for trusted module operations, never supplied by a client. */
+    public UUID currentStaffId() { return authenticatedStaffId(); }
+
     private UUID authenticatedStaffId() {
         var authentication = SecurityContextHolder.getContext().getAuthentication();
         if (authentication == null || !authentication.isAuthenticated()

@@ -92,7 +92,7 @@ class ApiErrorTests {
     }
 
     @ParameterizedTest
-    @CsvSource({"not-found,404,RESOURCE_NOT_FOUND", "conflict,409,CONFLICT", "authentication,401,UNAUTHENTICATED",
+    @CsvSource({"not-found,404,RESOURCE_NOT_FOUND", "conflict,409,CONFLICT", "visit-duplicate,409,VISIT_ALREADY_RECORDED", "authentication,401,UNAUTHENTICATED",
             "forbidden,403,FORBIDDEN", "unexpected,500,INTERNAL_ERROR", "framework,404,RESOURCE_NOT_FOUND"})
     void mapsExceptionsWithoutLeakingInternalDetails(String kind, int status, String code) throws Exception {
         problem(mvc.perform(get("/_test/failure/" + kind)), status, code, "/_test/failure/" + kind);
@@ -212,6 +212,7 @@ class ApiErrorTests {
             throw switch (kind) {
                 case "not-found" -> new ResourceNotFoundException();
                 case "conflict" -> new ConflictException();
+                case "visit-duplicate" -> new com.amiraharcs.loyalty.visit.service.VisitAlreadyRecordedException();
                 case "authentication" -> new BadCredentialsException(SECRET);
                 case "forbidden" -> new AccessDeniedException(SECRET);
                 case "framework" -> new ResponseStatusException(HttpStatus.NOT_FOUND, SECRET);

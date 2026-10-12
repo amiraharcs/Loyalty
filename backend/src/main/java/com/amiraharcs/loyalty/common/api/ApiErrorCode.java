@@ -8,6 +8,7 @@ public enum ApiErrorCode {
     VALIDATION_ERROR(HttpStatus.BAD_REQUEST, "Request validation failed.", "Validation error"),
     MALFORMED_REQUEST(HttpStatus.BAD_REQUEST, "The request body is missing or invalid.", "Malformed request"),
     RESOURCE_NOT_FOUND(HttpStatus.NOT_FOUND, "The requested resource was not found.", "Resource not found"),
+    VISIT_ALREADY_RECORDED(HttpStatus.CONFLICT, "A visit has already been recorded for this business date.", "Visit already recorded"),
     CONFLICT(HttpStatus.CONFLICT, "The request conflicts with the current resource state.", "Conflict"),
     UNAUTHENTICATED(HttpStatus.UNAUTHORIZED, "Authentication is required or credentials are invalid.", "Unauthenticated"),
     FORBIDDEN(HttpStatus.FORBIDDEN, "You are not permitted to perform this action.", "Forbidden"),

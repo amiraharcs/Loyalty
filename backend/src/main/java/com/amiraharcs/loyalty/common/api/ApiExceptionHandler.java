@@ -129,7 +129,7 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
 
     @ExceptionHandler(ConflictException.class)
     ResponseEntity<Object> conflict(ConflictException exception, WebRequest request) {
-        return response(ApiErrorCode.CONFLICT, List.of(), HttpHeaders.EMPTY, request);
+        return response(exception.code(), List.of(), HttpHeaders.EMPTY, request);
     }
 
     @ExceptionHandler(AuthenticationException.class)

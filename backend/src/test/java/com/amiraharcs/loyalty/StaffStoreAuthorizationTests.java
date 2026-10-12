@@ -154,6 +154,18 @@ class StaffStoreAuthorizationTests {
     }
 
     @Test
+    void realStaffSessionCannotCreateVisitThroughArbitraryCustomerOrClientTimePayload() throws Exception {
+        var browser = login(RoleCode.STAFF); var store = store(StoreStatus.ACTIVE); assign(browser, store);
+        long before = jdbc.queryForObject("SELECT count(*) FROM loyalty.visits", Long.class);
+        var csrf = browser.send(get("/api/v1/auth/csrf"), 200);
+        String token = json.readTree(csrf.getResponse().getContentAsString()).get("token").asText();
+        browser.send(post("/api/v1/staff/visits").header("X-CSRF-TOKEN", token).contentType("application/json")
+                .content(json.writeValueAsString(Map.of("customerId", UUID.randomUUID(), "storeId", store.getId(),
+                        "businessDate", "2050-01-01", "confirmedAt", "2050-01-01T00:00:00Z", "timezone", "Pacific/Auckland"))), 404);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM loyalty.visits", Long.class)).isEqualTo(before);
+    }
+
+    @Test
     void anonymousCannotReachScopeOrDirectlyInvokeTheService() throws Exception {
         request(new Browser(), store(StoreStatus.ACTIVE).getId(), 401);
         SecurityContextHolder.clearContext();
