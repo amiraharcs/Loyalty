@@ -19,8 +19,9 @@ public class AuthenticationIdentityService {
     private final CustomerProfileRepository profiles;
     private final Clock clock;
     private final EntityManager entities;
-    public AuthenticationIdentityService(UserRepository users, CustomerProfileRepository profiles, Clock clock, EntityManager entities) {
-        this.users = users; this.profiles = profiles; this.clock = clock; this.entities = entities;
+    private final org.springframework.jdbc.core.JdbcTemplate jdbc;
+    public AuthenticationIdentityService(UserRepository users, CustomerProfileRepository profiles, Clock clock, EntityManager entities, org.springframework.jdbc.core.JdbcTemplate jdbc) {
+        this.users = users; this.profiles = profiles; this.clock = clock; this.entities = entities; this.jdbc = jdbc;
     }
 
     @Transactional(readOnly = true)
@@ -37,6 +38,18 @@ public class AuthenticationIdentityService {
             return new CurrentIdentity(new CurrentUserResponse(id, name, roles), passwordVersion(user.getPasswordHash()));
         });
     }
+
+    /** Fresh database projection for permission rechecks after waiting for a business aggregate lock. */
+    @Transactional(readOnly = true)
+    public Optional<Set<RoleCode>> activeRoleGrants(UUID id) {
+        var rows = jdbc.query("SELECT u.status, r.role_code FROM loyalty.users u LEFT JOIN loyalty.user_roles r ON r.user_id=u.id WHERE u.id=?",
+                (rs, row) -> new GrantRow(rs.getString("status"), rs.getString("role_code")), id);
+        if (rows.isEmpty() || !rows.getFirst().status().equals("ACTIVE")) { return Optional.empty(); }
+        var grants = new HashSet<RoleCode>();
+        rows.stream().map(GrantRow::role).filter(Objects::nonNull).map(RoleCode::valueOf).forEach(grants::add);
+        return Optional.of(Set.copyOf(grants));
+    }
+    private record GrantRow(String status, String role) { }
 
     @Transactional
     public boolean upgradeHash(UUID id, String previousHash, String upgradedHash) {
