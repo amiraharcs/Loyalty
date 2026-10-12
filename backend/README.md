@@ -970,11 +970,93 @@ when provided by MVC.
 Security errors use the same DTO via `ApiErrorWriter` because they occur before
 MVC advice. Boot's fallback error settings also disable exception/message/trace
 exposure. MVC and security tests use controllers available only on the test
-classpath; production controllers implement only registration and the
-authentication session lifecycle.
+classpath; production controllers implement registration, the authentication session lifecycle
+and ADMIN points adjustments.
 
 ```sh
 ./mvnw -B -ntp -Dtest=ApiErrorTests test
+./mvnw -B -ntp clean verify
+```
+
+## Admin points adjustments (Issue #20)
+
+`POST /api/v1/admin/customers/{id}/points-adjustments` is the first production
+loyalty mutation endpoint. `{id}` is a CustomerProfile UUID, not a User or
+LoyaltyAccount UUID. Only active users with an explicit ADMIN grant may call it;
+ADMIN does not inherit STAFF or CUSTOMER. Security protects the route and service,
+and the identity module rechecks current database grants after lock waits.
+The target must have a loyalty account and an active CUSTOMER identity. Missing,
+disabled, noncustomer or unprovisioned targets return the same safe 404.
+
+Obtain CSRF using `/api/v1/auth/csrf` after signing in. Send `X-CSRF-TOKEN` and a
+UUID `Idempotency-Key` with every adjustment. The only body fields are:
+
+```json
+{"signedAmount": -100, "reason": "Correct duplicate historical award"}
+```
+
+The amount is a nonzero integer within ±9,007,199,254,740,991. JSON decimals and
+numeric strings are rejected rather than coerced. Required reasons are stripped
+of surrounding whitespace, validated as nonblank and limited to 1,000 Java
+characters after normalization. Avoid secrets and personal data in free-text
+reasons. Unknown fields, including actor, balance, type and timestamps, are rejected.
+The server derives the actor from the session and the timestamp from its clock.
+
+A successful creation (or exact retry) returns 201 with `Cache-Control: no-store`:
+
+```json
+{"transactionId":"0b5e4381-2dba-4d53-89c0-c3b96a40a225","signedAmount":-100,
+ "reason":"Correct duplicate historical award","createdAt":"2026-10-12T12:00:00Z","newBalance":0}
+```
+
+There is no Location header because no transaction-by-ID read endpoint exists yet.
+Inside one transaction, the service serializes the actor/operation/key using a
+PostgreSQL transaction advisory lock, then locks the LoyaltyAccount using the
+existing PESSIMISTIC_WRITE mutation lock. The ledger sum remains the only balance
+source. Positive adjustments add points; negative adjustments remove points.
+A total below zero returns `409 INSUFFICIENT_POINTS`; an unsupported total returns
+`409 CONFLICT`, with no writes. Invalid requests return 400, unauthenticated
+requests 401, and missing permission or CSRF 403 through the existing safe RFC
+9457 contract. Insufficient-points attempts produce a safe correlated security
+log outside durable business history; the log contains no reason/body/key.
+
+Every accepted correction is a new immutable ADJUSTMENT entry with its admin,
+reason and server time, and no Visit source. There is no balance setter and no
+update/delete API. V5/V7 already enforce actor, reason, nonzero safe amount and
+source constraints; those migrations and EARN invariants are unchanged.
+
+`V8__support_point_adjustments.sql` introduces a minimal generic durable
+`audit_logs` table and append-only service because the architecture requires
+successful privileged mutations and audits to commit together. Events include
+actorUserId, USER actorType, action, customer target, timestamp, server requestId
+and safe JSON metadata (transaction ID and signed amount). The reason remains
+in the ledger rather than being duplicated into audit metadata. PostgreSQL guards
+reject audit updates, deletion and truncation; actor/store references are restrictive.
+No audit read API, dashboard or general P9 functionality is implemented.
+
+V8 also adds generic infrastructure `idempotency_records`. Results are scoped
+by actor/operation/key and compared against a SHA-256 hash of the canonical
+normalized customer/amount/reason payload. Changed payloads or targets return
+`409 IDEMPOTENCY_KEY_REUSED`; exact retries return the original response snapshot,
+not a recalculated later balance. Current actor and target eligibility is checked
+before replay. Ledger, audit and retry result commit atomically; any failure rolls
+all three back. Keys/results are retained indefinitely for now, with a minimum
+24-hour expiry marker and index for a future explicit retention job. No automatic
+cleanup is introduced in this issue. Lock order is idempotency first, account
+second; future operations using both must preserve that order.
+
+The generic audit foundation leaves wider event policies, retention and scoped
+read projections to P9. Failed-attempt review currently uses safe application
+security logs, not a durable failed-audit workflow. Initial admin provisioning
+remains an operator responsibility; no default admin credentials or role-management
+endpoint was introduced. P5 and Issue #21 remain untouched.
+
+Focused acceptance tests use actual PostgreSQL-backed cookie sessions and CSRF,
+including authorization, validation, exact retries, rollback, immutable guards,
+V7 migration preservation and concurrent deductions/retries:
+
+```sh
+./mvnw -B -ntp -Dtest=AdminPointsAdjustmentTests,MigrationTests test
 ./mvnw -B -ntp clean verify
 ```
 
