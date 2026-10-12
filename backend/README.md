@@ -85,7 +85,7 @@ support. All profiles use:
 `V1__initialize_persistence.sql` documents the schema and revokes public CREATE
 on it. It creates no domain tables. V1 adds only Flyway's schema history; V2 adds
 the identity model described below. Add future immutable migrations as
-`V6__description.sql`, etc.;
+`V7__description.sql`, etc.;
 never edit a migration that has already run. A nonempty unmanaged `loyalty`
 schema fails migration rather than being silently adopted.
 
@@ -134,7 +134,9 @@ settings guard. Identity entities/repositories live under `auth/model`,
 repositories and scope services live
 under `store/model`, `store/repository` and `store/service`. Loyalty models,
 repositories and internal services live under `loyalty/model`,
-`loyalty/repository` and `loyalty/service`. Other domain boundaries remain
+`loyalty/repository` and `loyalty/service`. Visit persistence and internal
+confirmation live under `visit/model`, `visit/repository` and `visit/service`.
+Other domain boundaries remain
 package placeholders. Registration DTOs/controllers, validation and services live under `auth/api`,
 `auth/validation`, `auth/service`, with password/session configuration in
 `auth/config` and authentication infrastructure in `auth/security`. Shared
@@ -643,8 +645,8 @@ retries; do not use version alone as a substitute for the documented account loc
 There is no award/redemption/refund/admin business operation here. The foundation
 supports signed totals; future authorized workflows must enforce nonnegative
 balances, sufficient points, source eligibility, idempotency and store scope
-while holding the account lock. Visit/redemption/reversal columns are deliberately
-deferred until the owning entities exist, when new migrations must add real FKs,
+while holding the account lock. Visit source linkage and the earned-points snapshot remain deferred to Issue #19.
+Redemption/reversal columns wait for their owning workflows. New migrations must add real FKs,
 source/type and same-customer checks, unique sources and unique reversal rules.
 No placeholder source UUIDs or business entities are invented in this phase.
 
@@ -661,6 +663,87 @@ version increments, caller-owned locks and concurrent aggregate range enforcemen
 Registration tests cover empty accounts, duplicates and rollback after an account
 INSERT has actually been flushed. Disposable test databases own fixture cleanup;
 do not try to delete or truncate ledger records to reset production history.
+
+## Immutable visit registration foundation (Issue #18)
+
+`V6__create_visits.sql` adds `loyalty.visits`; V1–V5 are unchanged. A Visit has
+a generated UUID, CustomerProfile, LoyaltyAccount, Store and confirming User
+references, a `businessDate` and a UTC `confirmedAt`. There is no redundant
+creation timestamp: confirmation is the historical event. The earned-points
+snapshot and Visit → PointTransaction source link belong to Issue #19's atomic
+award integration. No zero-point or fictional award snapshot is stored here.
+
+A unique `(customer_id, business_date)` constraint permits one qualifying visit
+per customer per London date **across all stores**. Foreign keys are restrictive,
+with no cascading associations. A composite account/customer FK also prevents
+combining valid IDs belonging to different customers. V6 adds the corresponding
+unique account key without changing account ownership, versions or point history.
+Indexes support `(customer_id, confirmed_at DESC, id DESC)` history, store/staff
+confirmation history, and business-date lookups for daily operational queries.
+There are no seed visits or point transactions.
+
+`VisitService.confirmResolvedCustomer(customerId, storeId)` is an **internal
+foundation operation**, not an HTTP contract. It requires an authenticated
+explicit STAFF grant and an existing caller-owned write transaction. It reuses
+`StaffStoreScopeService` for current active staff/store assignment checks and the
+server-derived staff ID, checks ACTIVE customer identity with an explicit CUSTOMER
+grant through the existing authentication identity service, and resolves/locks
+the customer's loyalty account. Self-confirmation is forbidden even for a user
+with both CUSTOMER and STAFF roles. Missing/out-of-scope/inactive resources use
+the existing safe not-found outcome; ADMIN alone never implies STAFF.
+
+The account's `PESSIMISTIC_WRITE` lock stays held through the caller's commit or
+rollback. After waiting, the service checks customer eligibility and scoped store
+access, then captures the shared injected Clock once. The business date is derived
+from that instant using the IANA `Europe/London` rules, independent of the Clock's
+zone, browser date/time/timezone or database session timezone. Confirmation time
+is truncated to PostgreSQL microsecond precision before deriving/persisting its
+date, preventing nanosecond rounding across midnight. PostgreSQL independently
+checks that the persisted date matches the London confirmation date. The fall DST
+repeated hour cannot qualify twice; summer midnight occurs before UTC midnight.
+
+The service's existence check gives a safe duplicate outcome;
+`uq_visits_customer_business_date` remains the final authority for racing writers.
+Only SQLSTATE 23505 for that named constraint is translated to
+`VisitAlreadyRecordedException`. The shared Problem JSON handler maps it to
+**409 `VISIT_ALREADY_RECORDED`** without exposing SQL, customer, store or staff
+information. A failed INSERT aborts the caller transaction: do not catch the
+conflict and try to continue writing in that same transaction.
+
+Visits are immutable at both layers: Hibernate `@Immutable`, no setters and a
+persist-only repository fragment; PostgreSQL rejects UPDATE, DELETE and TRUNCATE,
+including cascaded truncation. Repository history uses confirmation time DESC,
+ID DESC, with safe internal projections containing visit ID, store ID, business
+date and confirmation time. Pages are bounded to 1–100 entries. Future history
+HTTP wrappers must derive/authorize customer ownership; an internal UUID argument
+is not proof of permission. No public history endpoint is added.
+
+**Production `POST /api/v1/staff/visits` is deliberately absent.** Accepting
+arbitrary customer/store IDs from a staff browser would bypass the architecture's
+trusted customer resolution. Calling the foundation directly also does not yet
+consume a resolution or award points. Future production orchestration must verify
+and consume an unexpired staff/store-bound QR or authorized manual ScanResolution,
+apply idempotency and full current-state/concurrent-revocation safeguards, and
+commit Visit + configured EARN entry/snapshot atomically. Issue #19 owns the points
+integration; P5 owns QR/resolution. This internal method must not be wired straight
+to a controller. Its caller must establish the trusted resolution and complete
+those safeguards before a production confirmation route can be enabled.
+
+The Issue #18 checklist's staff-created endpoint is therefore intentionally
+deferred, rather than replaced with an insecure customerId payload. This phase
+adds no points awards, point transactions, balance changes, streaks, QR/resolution,
+rewards, game, leaderboard or admin mutation workflows.
+
+Tests run against disposable real PostgreSQL: mapping/relationships, account-owner
+integrity, unique daily qualification across stores, restrictive FKs, database/ORM
+immutability, bounded ordered history, caller rollback, current roles/account/store
+eligibility, self-service denial, clock/timezone/midnight/DST boundaries and
+concurrent duplicates. Two raw repository transactions both observe no visit and
+race their INSERTs to prove the unique constraint independently of account locking.
+A separate service race uses two staff/stores. A real cookie-session HTTP test
+confirms that an arbitrary identity/date payload cannot create a visit through the
+absent endpoint. Migration tests cover empty V6 and V5 → V6 without altering an
+existing point ledger; both profiles retain Hibernate validation.
 
 ## CORS and frontend connectivity
 
