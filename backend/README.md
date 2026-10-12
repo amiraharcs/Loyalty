@@ -85,7 +85,7 @@ support. All profiles use:
 `V1__initialize_persistence.sql` documents the schema and revokes public CREATE
 on it. It creates no domain tables. V1 adds only Flyway's schema history; V2 adds
 the identity model described below. Add future immutable migrations as
-`V7__description.sql`, etc.;
+`V8__description.sql`, etc.;
 never edit a migration that has already run. A nonempty unmanaged `loyalty`
 schema fails migration rather than being silently adopted.
 
@@ -601,7 +601,8 @@ account and raises the shared resource-not-found exception.
 
 A `PointTransaction` has a generated UUID, account, signed BIGINT amount,
 `EARN` / `REDEMPTION` / `REFUND` / `ADJUSTMENT` type, UTC creation time,
-optional restrictive actor relationship and optional reason. EARN/REFUND are
+restrictive actor relationship (required for EARN/ADJUSTMENT), optional reason
+and a visit reference required only for EARN (added by V7). EARN/REFUND are
 positive, REDEMPTION negative, ADJUSTMENT either sign. Amounts cannot be zero.
 An adjustment requires an actor and a nonblank reason (maximum 1,000 characters).
 This persistence foundation does not authorize or implement an adjustment flow.
@@ -642,13 +643,13 @@ a managed account after the insert. The version field also supports explicit
 force-increment locking. Future services must deliberately handle transaction
 retries; do not use version alone as a substitute for the documented account lock.
 
-There is no award/redemption/refund/admin business operation here. The foundation
-supports signed totals; future authorized workflows must enforce nonnegative
-balances, sufficient points, source eligibility, idempotency and store scope
-while holding the account lock. Visit source linkage and the earned-points snapshot remain deferred to Issue #19.
-Redemption/reversal columns wait for their owning workflows. New migrations must add real FKs,
-source/type and same-customer checks, unique sources and unique reversal rules.
-No placeholder source UUIDs or business entities are invented in this phase.
+Issue #19 implements qualifying-visit earning, as documented below. Redemption,
+refund and admin mutation workflows remain deferred. Future authorized workflows
+must enforce nonnegative balances, sufficient points, source eligibility,
+idempotency and store scope while holding the account lock. V7 completes Visit
+source linkage and the earned-points snapshot. Redemption/reversal columns wait
+for their owning workflows, with real FKs, source/type and same-customer checks,
+unique sources and unique reversal rules in later migrations.
 
 Registration calls the loyalty module inside its original transaction: user,
 role, profile and empty account either all commit or all roll back. Duplicate
@@ -670,8 +671,8 @@ do not try to delete or truncate ledger records to reset production history.
 a generated UUID, CustomerProfile, LoyaltyAccount, Store and confirming User
 references, a `businessDate` and a UTC `confirmedAt`. There is no redundant
 creation timestamp: confirmation is the historical event. The earned-points
-snapshot and Visit → PointTransaction source link belong to Issue #19's atomic
-award integration. No zero-point or fictional award snapshot is stored here.
+snapshot and Visit → PointTransaction source link are now implemented by Issue #19
+in V7. Confirmation time and the actual configured award are immutable snapshots.
 
 A unique `(customer_id, business_date)` constraint permits one qualifying visit
 per customer per London date **across all stores**. Foreign keys are restrictive,
@@ -714,25 +715,27 @@ Visits are immutable at both layers: Hibernate `@Immutable`, no setters and a
 persist-only repository fragment; PostgreSQL rejects UPDATE, DELETE and TRUNCATE,
 including cascaded truncation. Repository history uses confirmation time DESC,
 ID DESC, with safe internal projections containing visit ID, store ID, business
-date and confirmation time. Pages are bounded to 1–100 entries. Future history
+date, confirmation time and awarded-points snapshot. Pages are bounded to 1–100 entries. Future history
 HTTP wrappers must derive/authorize customer ownership; an internal UUID argument
 is not proof of permission. No public history endpoint is added.
 
 **Production `POST /api/v1/staff/visits` is deliberately absent.** Accepting
 arbitrary customer/store IDs from a staff browser would bypass the architecture's
-trusted customer resolution. Calling the foundation directly also does not yet
-consume a resolution or award points. Future production orchestration must verify
+trusted customer resolution. The internal operation now awards points atomically, but does not yet
+consume a trusted resolution. Future production orchestration must verify
 and consume an unexpired staff/store-bound QR or authorized manual ScanResolution,
 apply idempotency and full current-state/concurrent-revocation safeguards, and
-commit Visit + configured EARN entry/snapshot atomically. Issue #19 owns the points
-integration; P5 owns QR/resolution. This internal method must not be wired straight
+compose the existing atomic Visit + configured EARN operation with resolution
+consumption in the same transaction. Issue #19 completes points integration;
+P5 owns QR/resolution. This internal method must not be wired straight
 to a controller. Its caller must establish the trusted resolution and complete
 those safeguards before a production confirmation route can be enabled.
 
 The Issue #18 checklist's staff-created endpoint is therefore intentionally
 deferred, rather than replaced with an insecure customerId payload. This phase
-adds no points awards, point transactions, balance changes, streaks, QR/resolution,
-rewards, game, leaderboard or admin mutation workflows.
+added the visit foundation; Issue #19 now adds its atomic earning behavior.
+Streaks, QR/resolution, rewards, game, leaderboard and admin mutation workflows
+remain deferred.
 
 Tests run against disposable real PostgreSQL: mapping/relationships, account-owner
 integrity, unique daily qualification across stores, restrictive FKs, database/ORM
@@ -744,6 +747,83 @@ A separate service race uses two staff/stores. A real cookie-session HTTP test
 confirms that an arbitrary identity/date payload cannot create a visit through the
 absent endpoint. Migration tests cover empty V6 and V5 → V6 without altering an
 existing point ledger; both profiles retain Hibernate validation.
+
+## Atomic qualifying-visit awards (Issue #19)
+
+The server-owned `loyalty.visits.points-per-visit` setting defaults to **100**.
+Set `POINTS_PER_VISIT` in the application environment to override it; `.env.example`
+documents the variable, but Compose's `.env` does not automatically export values
+to a Java process. The immutable `VisitAwardRule` rejects zero, negative,
+non-integer and browser-unsafe settings at startup. Supported awards are
+1–9,007,199,254,740,991. The internal confirmation method still takes only trusted
+resolved customer/store IDs, never an amount, date, timezone or confirming actor
+from a browser. Configuration changes apply to new operations after restart.
+
+`V7__link_visit_earn_transactions.sql` adds:
+
+- Immutable, positive BIGINT `visits.earned_points`, without a fabricated default.
+- Nullable `point_transactions.visit_id`: required for EARN, forbidden for other
+  transaction types; EARN also requires the confirming actor.
+- A restrictive composite source FK that matches Visit ID **and** account,
+  awarded amount and confirming actor. Independent valid IDs cannot be combined
+  into an earning against a different account or snapshot.
+- Unique `uq_point_transactions_visit_earn`, which also indexes source lookup.
+- A deferred `visit_requires_earn` constraint trigger: the Visit INSERT precedes
+  its EARN INSERT, but commit is rejected if the matching EARN is missing.
+
+V1–V6 are untouched. Existing immutable history/safe-total/version guards remain.
+The earlier foundation had no public visit/award endpoint. V7 explicitly requires
+no legacy unawarded Visit records or unlinked EARN rows; it refuses migration if
+those exist, rather than inventing awards or rewriting/deleting immutable history.
+Existing non-EARN ledger history is preserved. Any unexpected legacy records need
+an explicit, reviewed reconciliation migration based on their actual provenance;
+do not delete them or disable history guards to force this migration through.
+The ordinary clean/preproduction V6 database upgrades without seeding activity.
+
+`VisitService.confirmResolvedCustomer` preserves existing staff/store/customer
+eligibility checks, self-confirmation denial, caller-owned write transaction and
+`PESSIMISTIC_WRITE` account lock. The lock is taken before balance checks/writes;
+future resolution consumption must use the architecture's consistent lock order.
+After deriving the London date and checking daily uniqueness, it reads the ledger
+balance and checks the configured addition against safe-integer bounds **before**
+inserting the Visit. The Visit snapshots the configured award. The loyalty module
+then creates `PointTransaction.forVisit(visit)` so account, amount, actor and time
+come from that persisted immutable Visit, flushes the EARN and reads the updated
+balance from `SUM(signed_amount)`. No cached balance or balance setter is added.
+The existing insert guard advances/refreshes account version and independently
+protects exact totals, including concurrent raw SQL and stricter isolation levels.
+
+The internal result contains only `visitId`, `confirmedAt`, `businessDate`,
+`earnedPoints` and ledger-derived `balance`. Visit history retains each historical
+award snapshot; changed configuration cannot alter an old award or ledger entry.
+One customer/date across stores, one EARN/Visit, account serialization and the
+single transaction prevent duplicate awarding. Repeated confirmation returns
+409 `VISIT_ALREADY_RECORDED`. A duplicate earning source maps to the existing safe
+409 `CONFLICT`; other database failures do not become false duplicate outcomes.
+Unsafe resulting totals also fail as a safe conflict before any new Visit write.
+
+Any failure between Visit and EARN, after the EARN flush/version update, or before
+the caller's commit rolls back both records and the version change. The deferred
+constraint also blocks an accidental caller that bypasses the service and tries
+to commit a Visit alone. Do not switch this constraint to IMMEDIATE before the
+Visit/EARN pair is inserted. Neither entity exposes normal updates/deletes;
+corrections cannot rewrite existing visits or points.
+
+**Public `POST /api/v1/staff/visits` remains absent.** Atomic awards now exist,
+but a production request must still consume an unexpired, staff/store-bound
+ScanResolution and apply idempotency/current-state safeguards. That trusted QR or
+authorized manual-resolution flow belongs to P5. No arbitrary customerId-based
+endpoint is added. Streak, rewards/refunds, admin adjustments, game and leaderboard
+workflows remain deferred; Issue #20 is not implemented.
+
+Real PostgreSQL tests cover complete commits, missing-EARN commit rejection,
+source FK/ownership/amount/actor consistency, unique source/type/sign constraints,
+configured awards and unchanged old snapshots, safe boundaries, concurrent same
+staff/different staff/different stores, retry, three rollback boundaries and
+unchanged registration/session/security behavior. Eligibility rejections assert
+that neither Visit nor ledger records were written. Migrations validate both
+clean V7 and V6 upgrades, preserve compatible history, and refuse incompatible
+legacy data without altering it. Both profiles retain Hibernate validation.
 
 ## CORS and frontend connectivity
 
