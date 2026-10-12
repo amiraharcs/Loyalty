@@ -1,5 +1,2 @@
-/**
- * Qualifying-visit workflows within the Loyalty boundary.
- * <p>Reserved package boundary; business types are added in later issues.</p>
- */
+/** Immutable qualifying visit history and internal confirmation foundation. */
 package com.amiraharcs.loyalty.visit;
