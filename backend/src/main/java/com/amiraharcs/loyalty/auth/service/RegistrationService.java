@@ -9,6 +9,7 @@ import com.amiraharcs.loyalty.auth.repository.UserRepository;
 import com.amiraharcs.loyalty.common.api.ConflictException;
 import com.amiraharcs.loyalty.customer.model.CustomerProfile;
 import com.amiraharcs.loyalty.customer.repository.CustomerProfileRepository;
+import com.amiraharcs.loyalty.loyalty.service.LoyaltyAccountService;
 import jakarta.persistence.EntityManager;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotNull;
@@ -27,16 +28,19 @@ public class RegistrationService {
     private final UserRepository users;
     private final RoleRepository roles;
     private final CustomerProfileRepository profiles;
+    private final LoyaltyAccountService loyaltyAccounts;
     private final PasswordEncoder encoder;
     private final Clock clock;
     private final EntityManager entities;
     private final TransactionTemplate transactions;
 
     public RegistrationService(UserRepository users, RoleRepository roles, CustomerProfileRepository profiles,
-            PasswordEncoder encoder, Clock clock, EntityManager entities, PlatformTransactionManager manager) {
+            PasswordEncoder encoder, Clock clock, EntityManager entities, PlatformTransactionManager manager,
+            LoyaltyAccountService loyaltyAccounts) {
         this.users = users;
         this.roles = roles;
         this.profiles = profiles;
+        this.loyaltyAccounts = loyaltyAccounts;
         this.encoder = encoder;
         this.clock = clock;
         this.entities = entities;
@@ -53,7 +57,8 @@ public class RegistrationService {
                 var user = users.save(new User(User.canonicalizeEmail(request.email()), hash,
                         AccountStatus.ACTIVE, clock.instant(), Set.of(role)));
                 // Privacy-first default: no email-derived alias or public name until explicitly chosen later.
-                profiles.save(new CustomerProfile(user, request.displayName(), "Member", true));
+                var profile = profiles.save(new CustomerProfile(user, request.displayName(), "Member", true));
+                loyaltyAccounts.createForRegistration(profile, clock.instant());
                 entities.flush(); // Surface constraints inside the atomic persistence boundary.
             });
         } catch (RuntimeException exception) {

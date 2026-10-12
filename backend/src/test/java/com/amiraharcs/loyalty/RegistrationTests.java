@@ -6,6 +6,8 @@ import com.amiraharcs.loyalty.auth.service.RegistrationService;
 import com.amiraharcs.loyalty.customer.model.CustomerProfile;
 import com.amiraharcs.loyalty.customer.repository.CustomerProfileRepository;
 import com.amiraharcs.loyalty.common.api.ConflictException;
+import com.amiraharcs.loyalty.loyalty.model.LoyaltyAccount;
+import com.amiraharcs.loyalty.loyalty.repository.LoyaltyAccountRepository;
 import jakarta.persistence.EntityManager;
 import jakarta.validation.ConstraintViolationException;
 import java.util.Map;
@@ -51,6 +53,7 @@ class RegistrationTests {
     @Autowired JsonMapper json;
     @Autowired EntityManager entities;
     @MockitoSpyBean CustomerProfileRepository profiles;
+    @MockitoSpyBean LoyaltyAccountRepository loyaltyAccounts;
 
     @DynamicPropertySource
     static void database(DynamicPropertyRegistry registry) { PostgresTestDatabase.register(registry); }
@@ -90,6 +93,7 @@ class RegistrationTests {
         assertThat(profile.get("display_name")).isEqualTo("Haroon");
         assertThat(profile.get("leaderboard_alias")).isEqualTo("Member");
         assertThat(profile.get("leaderboard_private")).isEqualTo(true);
+        assertEmptyAccount(id);
         assertThat(result.getRequest().getSession(false)).isNull();
         assertThat(result.getResponse().getContentAsString()).doesNotContain(PASSWORD, hash);
         assertThat(logs.getAll()).doesNotContain(PASSWORD, hash);
@@ -104,6 +108,7 @@ class RegistrationTests {
                 .andExpect(content().contentType("application/problem+json")).andReturn();
         assertThat(result.getResponse().getContentAsString()).doesNotContain(PASSWORD, email, "uq_users", "SQL", "password_hash", "trace");
         assertThat(logs.getAll()).doesNotContain(PASSWORD);
+        assertEmptyAccount(jdbc.queryForObject("SELECT id FROM loyalty.users WHERE canonical_email = ?", UUID.class, email));
     }
 
     @Test
@@ -125,6 +130,7 @@ class RegistrationTests {
         UUID id = jdbc.queryForObject("SELECT id FROM loyalty.users WHERE canonical_email = ?", UUID.class, email);
         assertThat(count("customer_profiles", id)).isEqualTo(1);
         assertThat(count("user_roles", id)).isEqualTo(1);
+        assertEmptyAccount(id);
     }
 
     @Test
@@ -141,6 +147,29 @@ class RegistrationTests {
         assertThat(jdbc.queryForObject("SELECT count(*) FROM loyalty.users WHERE canonical_email = ?", Integer.class, email)).isZero();
         assertThat(count("user_roles", attemptedId.get())).isZero();
         assertThat(count("customer_profiles", attemptedId.get())).isZero();
+    }
+
+    private void assertEmptyAccount(UUID userId) {
+        var row = jdbc.queryForMap("SELECT a.id FROM loyalty.loyalty_accounts a JOIN loyalty.customer_profiles p "
+                + "ON p.id = a.customer_id WHERE p.user_id = ?", userId);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM loyalty.point_transactions WHERE account_id = ?", Integer.class, row.get("id"))).isZero();
+    }
+
+    @Test
+    void failureAfterAccountFlushRollsBackIdentityProfileAndAccount() {
+        String email = email();
+        var attemptedCustomer = new AtomicReference<UUID>();
+        doAnswer(invocation -> {
+            LoyaltyAccount account = invocation.getArgument(0);
+            attemptedCustomer.set(account.getCustomer().getId());
+            entities.persist(account);
+            entities.flush();
+            throw new IllegalStateException("Synthetic account persistence failure");
+        }).when(loyaltyAccounts).save(any(LoyaltyAccount.class));
+        assertThatThrownBy(() -> service.register(request(email))).isInstanceOf(IllegalStateException.class);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM loyalty.users WHERE canonical_email = ?", Integer.class, email)).isZero();
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM loyalty.customer_profiles WHERE id = ?", Integer.class, attemptedCustomer.get())).isZero();
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM loyalty.loyalty_accounts WHERE customer_id = ?", Integer.class, attemptedCustomer.get())).isZero();
     }
 
     @Test
