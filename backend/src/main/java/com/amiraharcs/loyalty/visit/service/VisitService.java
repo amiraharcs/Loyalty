@@ -45,8 +45,8 @@ public class VisitService {
     }
 
     /**
-     * Internal foundation only. A future caller must supply a trusted, staff/store-bound resolution.
-     * The caller owns the full transaction; no HTTP route may call this without trusted resolution integration.
+     * Internal visit composition. The staff QR workflow supplies a trusted, staff/store-bound resolution.
+     * The caller owns the full transaction, source consumption, idempotency and successful audit/event persistence.
      */
     @PreAuthorize(RoleAuthorities.REQUIRES_STAFF)
     @Transactional(propagation = Propagation.MANDATORY)
@@ -56,8 +56,8 @@ public class VisitService {
         var customer = profiles.findById(customerId).orElseThrow(ResourceNotFoundException::new);
         if (staffId.equals(customer.getUser().getId())) { throw new AccessDeniedException("Access denied"); }
         var account = accounts.lockForMutation(customerId);
-        var identity = identities.current(customer.getUser().getId()).orElseThrow(ResourceNotFoundException::new);
-        if (!identity.response().roles().contains(RoleCode.CUSTOMER)) { throw new ResourceNotFoundException(); }
+        var grants = identities.activeRoleGrants(customer.getUser().getId()).orElseThrow(ResourceNotFoundException::new);
+        if (!grants.contains(RoleCode.CUSTOMER)) { throw new ResourceNotFoundException(); }
         // Recheck scoped eligibility after waiting for the aggregate; no long-lived permission token.
         scope.requireAssignedStore(storeId);
         var confirmedAt = clock.instant().truncatedTo(ChronoUnit.MICROS);
@@ -85,6 +85,12 @@ public class VisitService {
             }
             throw exception;
         }
+    }
+
+    /** Internal duplicate check for a consumed source; callers must authorize staff/store/customer first. */
+    @PreAuthorize(RoleAuthorities.REQUIRES_STAFF)
+    public boolean alreadyQualifiedToday(UUID customerId) {
+        return visits.existsByCustomerIdAndBusinessDate(customerId, Visit.businessDateAt(clock.instant()));
     }
 
     /** Internal read projection; future HTTP wrappers must derive and authorize customer ownership. */

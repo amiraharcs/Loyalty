@@ -48,8 +48,8 @@ public class StaffStoreScopeService {
                 || !(authentication.getPrincipal() instanceof SessionPrincipal principal)) {
             throw new BadCredentialsException("Authentication failed");
         }
-        var identity = identities.current(principal.userId()).orElseThrow(() -> new BadCredentialsException("Authentication failed"));
-        if (!identity.response().roles().contains(RoleCode.STAFF)) { throw new AccessDeniedException("Access denied"); }
+        var grants = identities.activeRoleGrants(principal.userId()).orElseThrow(() -> new BadCredentialsException("Authentication failed"));
+        if (!grants.contains(RoleCode.STAFF)) { throw new AccessDeniedException("Access denied"); }
         return principal.userId();
     }
 }

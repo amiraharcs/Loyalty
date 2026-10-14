@@ -42,6 +42,8 @@ public class AuthenticationIdentityService {
     /** Fresh database projection for permission rechecks after waiting for a business aggregate lock. */
     @Transactional(readOnly = true)
     public Optional<Set<RoleCode>> activeRoleGrants(UUID id) {
+        // JDBC bypasses ORM auto-flush; include pending identity writes when joining a write transaction.
+        if (!org.springframework.transaction.support.TransactionSynchronizationManager.isCurrentTransactionReadOnly()) { entities.flush(); }
         var rows = jdbc.query("SELECT u.status, r.role_code FROM loyalty.users u LEFT JOIN loyalty.user_roles r ON r.user_id=u.id WHERE u.id=?",
                 (rs, row) -> new GrantRow(rs.getString("status"), rs.getString("role_code")), id);
         if (rows.isEmpty() || !rows.getFirst().status().equals("ACTIVE")) { return Optional.empty(); }

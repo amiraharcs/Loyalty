@@ -281,9 +281,9 @@ class QrIdentityTokenTests {
         assertThat(rows(customer,"")).isEqualTo(1);assertThat(rows(customer,"AND status='ACTIVE'")).isEqualTo(1);
     }
 
-    @Test void noStaffScanOrValidationEndpointWasExposed() throws Exception {
+    @Test void scanRequiresAValidBodyAndInternalValidationRemainsUnexposed() throws Exception {
         var staff=login(RoleCode.STAFF);
-        staff.send(post("/api/v1/staff/scans").header("X-CSRF-TOKEN",staff.csrf).contentType("application/json").content("{}"),404);
+        staff.send(post("/api/v1/staff/scans").header("X-CSRF-TOKEN",staff.csrf).contentType("application/json").content("{}"),400);
         staff.send(post("/api/v1/staff/qr-tokens/validate").header("X-CSRF-TOKEN",staff.csrf).contentType("application/json").content("{}"),404);
     }
 }
