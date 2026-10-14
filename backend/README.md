@@ -6,7 +6,8 @@ registration, server-side authentication sessions and explicit role enforcement.
 Issue #16 adds store persistence and staff-store scope services.
 Issues #17–#20 add the immutable ledger, atomic visit awards and admin corrections.
 Issue #21 adds signed temporary QR identity references. Issue #22 connects staff
-QR resolution to secure visit confirmation. Other product APIs remain unimplemented.
+QR resolution to secure visit confirmation. Issue #23 hardens scan history and abuse controls.
+Other product APIs remain unimplemented.
 [P1 architecture](../docs/architecture/README.md) remains the source of truth.
 
 ## Local development
@@ -1269,6 +1270,104 @@ rollback after event/audit/retry writes and coordinated confirmation races.
 
 Manual lookup, ScanResolution front-end integration, streaks and Issue #23 remain
 out of scope. Issue #21's internal validator remains non-public.
+
+## QR history and abuse controls (Issue #23)
+
+Issue #23 extends the Issue #22 history/writers and limiter infrastructure. It
+adds no new product endpoint and does not duplicate QR validation, scan resolution,
+visit awarding, audit or idempotency. Existing legitimate scan/confirm semantics
+remain, including the distinction between natural QR expiry and explicit revocation.
+
+`qr_scan_events` remains the append-only operational source of truth. Its typed
+`ScanEventOutcome` values are **RESOLUTION_CREATED**, **VISIT_CONFIRMED** and
+**REJECTED**, retaining the established database names. Rejection writers accept
+only the shared `ApiErrorCode` enum: QR_INVALID (malformed/forged/unknown token or
+key, grouped safely), QR_EXPIRED, QR_REVOKED, RESOURCE_NOT_FOUND (missing/wrong-staff
+resolution or store scope), FORBIDDEN, UNAUTHENTICATED, SCAN_RESOLUTION_EXPIRED,
+SCAN_RESOLUTION_CONSUMED, VISIT_ALREADY_RECORDED, IDEMPOTENCY_KEY_REUSED,
+RATE_LIMITED, CONFLICT or INTERNAL_ERROR as applicable. No arbitrary exception
+message or free-text request reason becomes history. Internal read projections
+retain reason strings for compatibility with immutable historical/future codes.
+
+The `QrScanEvent` projection contains only event ID, optional trusted token jti,
+server-derived staff/store IDs, server time, category/reason, server requestId
+and optional resolution/visit references. Raw QR, email, passwords, cookies,
+CSRF, signing material, IP addresses and request bodies are not persisted/logged
+by this history subsystem. A rejected scan stores a store ID only after current
+assignment and active-store validation, not merely because that UUID exists.
+Owned-resolution failures can retain their previously validated token/store and
+resolution reference; a wrong staff member's attempt retains none of the victim's
+context. Untrusted correlation headers are still replaced by RequestIdFilter.
+
+`V11__harden_qr_scan_history.sql` adds nullable, restrictive resolution/visit FKs
+for operational correlation and three indexes: staff/time/id, store/time/id and
+outcome/time/id. Existing token/time and requestId indexes remain useful. The old
+staff/store/time index cannot order staff-only history by time because store_id
+intervenes; the new staff-only index serves that real query. V1–V10 are unchanged.
+V10 rows keep their original event IDs, timestamps, outcomes and reasons; new
+references remain null on legacy rows rather than inventing links or updating
+immutable history. The existing PostgreSQL UPDATE/DELETE/TRUNCATE guards remain.
+
+`ScanEventRepository` supplies **internal-only**, exact-anchor queries by staff,
+store, token jti, outcome or requestId. Every query requires an inclusive-from /
+exclusive-to window of at most 31 days and 1–100 rows, ordered by occurredAt DESC,
+id DESC. It has no mutation methods or HTTP route. It returns the bounded recent
+slice, not a new public pagination contract. Future admin browsing must apply
+its own authorization and cursor contract; none is added here.
+
+Successful history, generic confirmation audit, Visit/EARN, source consumption
+and idempotency still commit together. Rejected domain events use the existing
+REQUIRES_NEW writer **after** the business transaction has ended. Store validation
+runs before opening that writer transaction, so a denied scope lookup cannot mark
+it rollback-only. Event persistence failures fall back to a safe correlated log
+without recursive retries or replacing the original RFC 9457 failure. Malformed
+DTOs and pre-controller authentication/CSRF denials remain the shared MVC/security
+boundary; the QR operational history covers authorized, well-formed staff-domain
+attempts. Failed ledger insertion leaves no misleading success event or partial
+Visit/EARN, while a safe independent rejection survives.
+
+Scanning keeps the existing **60 attempts/minute/staff** and **240/minute/socket
+IP** budgets. The IP reservation now runs inside the recorded attempt boundary,
+so IP 429s are persisted too, using the authenticated actor and validated store
+context. Raw forwarded headers do not change the socket address.
+
+Confirmation now has an independent, temporary failed-attempt budget to bound
+consumed-resolution/unknown-resolution replay spam and history growth:
+
+| Environment setting | Default | Range |
+| --- | --- | --- |
+| `QR_CONFIRM_FAILURE_LIMIT` | 60 failures/minute/staff | 1–1000 |
+| `QR_CONFIRM_IP_FAILURE_LIMIT` | 240 failures/minute/socket IP | 1–1000 |
+
+These reuse SlidingWindowRateLimiter, its bounded in-memory key map and injected
+Clock. In-flight operations reserve a slot; failed confirmations retain it until
+expiry. Successful confirmations and exact idempotent retries release their own
+reservations. IP rejection also releases the new staff reservation. A saturated
+budget returns 429 RATE_LIMITED, Retry-After and no-store problem JSON, with a
+safe history record and no counters in the response. Restrictions expire at the
+minute boundary; there is no persistent account/token lockout. New configuration
+is documented in `.env.example`; restart after changing it.
+
+No per-token lockout or single-resolution rule was added: multiple legitimate
+staff resolutions may exist for one current QR. Existing account/token/resolution
+locks, daily visit uniqueness and source consumption still permit only one award.
+The existing QR issuance limits are unchanged. Rate limits remain per process and
+reset on restart; multi-instance deployment needs shared/gateway enforcement,
+which is intentionally outside this issue. Database-backed rejection history is
+not a substitute for upstream request-volume controls or a retention policy.
+
+Verification covers safe event categories/ownership/correlation, scope omission,
+internal query bounds, privacy, ledger/event/audit rollback, concurrent replay,
+staff/IP 429 recording, limiter reset and successful retry reservation release.
+Existing natural-expiry/revocation, crypto, auth and append-only tests remain.
+
+```sh
+./mvnw -B -ntp -Dtest=QrScanHistoryTests,QrAbuseProtectionTests,ConfirmationFailureRateLimiterTests,StaffQrConfirmationTests,MigrationTests test
+./mvnw -B -ntp clean verify
+```
+
+No scan-history browsing API/UI, manual lookup, distributed limiter, retention
+job, streak calculation or Issue #24 work is included.
 
 ## References
 
