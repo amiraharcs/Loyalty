@@ -1,5 +1,5 @@
 /**
- * Temporary identity QR resolution and scan history; no direct balance mutation.
- * <p>Reserved package boundary; business types are added in later issues.</p>
+ * Short-lived signed identity references and server-side token lifecycle.
+ * Staff resolution/scan history are reserved for later issues; this module never awards points.
  */
 package com.amiraharcs.loyalty.qr;

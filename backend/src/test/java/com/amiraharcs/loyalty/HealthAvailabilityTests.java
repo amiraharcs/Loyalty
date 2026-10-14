@@ -33,6 +33,7 @@ class HealthAvailabilityTests {
 
     @DynamicPropertySource
     static void database(DynamicPropertyRegistry registry) {
+        QrTestSigningProperties.register(registry);
         registry.add("DB_URL", DATABASE::getJdbcUrl);
         registry.add("DB_USERNAME", DATABASE::getUsername);
         registry.add("DB_PASSWORD", DATABASE::getPassword);

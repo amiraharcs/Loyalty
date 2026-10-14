@@ -59,10 +59,10 @@ abstract class FoundationContextTests {
         var entityManagerFactory = context.getBean(EntityManagerFactory.class);
         assertThat(entityManagerFactory.isOpen()).isTrue();
         assertThat(entityManagerFactory.getMetamodel().getEntities()).extracting(jakarta.persistence.metamodel.EntityType::getName)
-                .containsExactlyInAnyOrder("User", "Role", "CustomerProfile", "Store", "StaffStore", "LoyaltyAccount", "PointTransaction", "Visit");
+                .containsExactlyInAnyOrder("User", "Role", "CustomerProfile", "Store", "StaffStore", "LoyaltyAccount", "PointTransaction", "Visit", "QrIdentityToken");
         var flyway = context.getBean(Flyway.class);
         flyway.validate();
-        assertThat(flyway.info().current().getVersion().toString()).isEqualTo("8");
+        assertThat(flyway.info().current().getVersion().toString()).isEqualTo("9");
         assertThat(environment.getProperty("spring.jpa.hibernate.ddl-auto")).isEqualTo("validate");
         assertThat(environment.getProperty("spring.sql.init.mode")).isEqualTo("never");
     }

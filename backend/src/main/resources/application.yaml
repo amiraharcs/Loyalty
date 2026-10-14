@@ -96,3 +96,9 @@ management:
 loyalty:
   visits:
     points-per-visit: ${POINTS_PER_VISIT:100}
+  qr:
+    issuer: ${QR_ISSUER:}
+    audience: ${QR_AUDIENCE:}
+    active-key-id: ${QR_ACTIVE_KEY_ID:}
+    signing-key-base64: ${QR_SIGNING_KEY_BASE64:}
+    verification-keys: ${QR_VERIFICATION_KEYS:}
