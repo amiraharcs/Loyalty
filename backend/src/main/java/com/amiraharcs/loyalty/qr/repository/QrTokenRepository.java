@@ -11,6 +11,9 @@ import org.springframework.data.repository.query.Param;
 
 public interface QrTokenRepository extends Repository<QrIdentityToken, String> {
     Optional<QrIdentityToken> findById(String jti);
+    @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
+    @Query("select token from QrIdentityToken token where token.jti=:jti")
+    Optional<QrIdentityToken> lockByJti(@Param("jti") String jti);
     @Modifying(flushAutomatically = true)
     @Query("update QrIdentityToken token set token.status = com.amiraharcs.loyalty.qr.model.QrTokenStatus.REVOKED, "
             + "token.revokedAt = :now where token.customer.id = :customerId and token.status = com.amiraharcs.loyalty.qr.model.QrTokenStatus.ACTIVE")

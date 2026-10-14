@@ -32,6 +32,10 @@ public class QrIdentityToken {
         this.jti = jti; this.customer = Objects.requireNonNull(customer); this.issuedAt = Objects.requireNonNull(issuedAt);
         this.expiresAt = issuedAt.plusSeconds(60); this.keyId = keyId; this.status = QrTokenStatus.ACTIVE;
     }
+    public void consume() {
+        if (status != QrTokenStatus.ACTIVE) { throw new IllegalStateException("QR reference cannot be consumed"); }
+        status = QrTokenStatus.CONSUMED;
+    }
     public String getJti() { return jti; }
     public CustomerProfile getCustomer() { return customer; }
     public Instant getIssuedAt() { return issuedAt; }

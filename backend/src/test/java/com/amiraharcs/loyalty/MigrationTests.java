@@ -36,7 +36,7 @@ class MigrationTests {
     void migratesEmptyDatabaseWithOnlyImplementedDomainAndSessionTablesAndCanRunAgain() throws Exception {
         withEmptyDatabase(url -> {
             var flyway = flyway(url);
-            assertThat(flyway.migrate().migrationsExecuted).isEqualTo(9);
+            assertThat(flyway.migrate().migrationsExecuted).isEqualTo(10);
             flyway.validate();
             assertThat(flyway.migrate().migrationsExecuted).isZero();
             try (var connection = DriverManager.getConnection(url,
@@ -46,7 +46,7 @@ class MigrationTests {
                          + "WHERE table_schema = 'loyalty' ORDER BY table_name")) {
                 var names = new java.util.ArrayList<String>();
                 while (tables.next()) { names.add(tables.getString(1)); }
-                assertThat(names).containsExactly("audit_logs", "customer_profiles", "flyway_schema_history", "idempotency_records", "loyalty_accounts", "point_transactions", "qr_identity_tokens", "roles", "spring_session", "spring_session_attributes", "staff_store", "stores", "user_roles", "users", "visits");
+                assertThat(names).containsExactly("audit_logs", "customer_profiles", "flyway_schema_history", "idempotency_records", "loyalty_accounts", "point_transactions", "qr_identity_tokens", "qr_scan_events", "roles", "scan_resolutions", "spring_session", "spring_session_attributes", "staff_store", "stores", "user_roles", "users", "visits");
             }
             assertThatThrownBy(flyway::clean).isInstanceOf(FlywayException.class).hasMessageContaining("cleanDisabled");
         });
@@ -68,7 +68,7 @@ class MigrationTests {
                 insert.setObject(1, identity);
                 insert.executeUpdate();
             }
-            assertThat(flyway(url).migrate().migrationsExecuted).isEqualTo(6);
+            assertThat(flyway(url).migrate().migrationsExecuted).isEqualTo(7);
             try (var connection = DriverManager.getConnection(url,
                     PostgresTestDatabase.DATABASE.getUsername(), PostgresTestDatabase.DATABASE.getPassword());
                  var statement = connection.createStatement();
@@ -103,7 +103,7 @@ class MigrationTests {
                 }
             }
             var migrated = flyway(url);
-            assertThat(migrated.migrate().migrationsExecuted).isEqualTo(5);
+            assertThat(migrated.migrate().migrationsExecuted).isEqualTo(6);
             migrated.validate();
             assertThat(migrated.migrate().migrationsExecuted).isZero();
             try (var connection = DriverManager.getConnection(url,
@@ -174,7 +174,7 @@ class MigrationTests {
                         + UUID.randomUUID() + "','" + ids[2] + "',10,'ADJUSTMENT','" + ids[0] + "','Synthetic baseline',now())");
             }
             var upgraded = flyway(url);
-            assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(3); upgraded.validate();
+            assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(4); upgraded.validate();
             assertThat(upgraded.migrate().migrationsExecuted).isZero();
             try (var connection = DriverManager.getConnection(url, PostgresTestDatabase.DATABASE.getUsername(),
                     PostgresTestDatabase.DATABASE.getPassword()); var statement = connection.createStatement();
@@ -218,11 +218,30 @@ class MigrationTests {
                 statement.executeUpdate("INSERT INTO loyalty.point_transactions(id,account_id,signed_amount,type,actor_id,reason,created_at) VALUES ('"+UUID.randomUUID()+"','"+ids[2]+"',10,'ADJUSTMENT','"+ids[0]+"','Synthetic baseline',now())");
                 statement.executeUpdate("INSERT INTO loyalty.audit_logs(id,actor_user_id,actor_type,action,target_type,target_id,occurred_at,request_id,metadata) VALUES ('"+UUID.randomUUID()+"','"+ids[0]+"','USER','SYNTHETIC_FIXTURE','CUSTOMER','"+ids[1]+"',now(),'"+UUID.randomUUID()+"','{}')");
             }
-            var upgraded=flyway(url);assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(1);upgraded.validate();
+            var upgraded=atVersion(url,"9");assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(1);upgraded.validate();
             assertThat(upgraded.migrate().migrationsExecuted).isZero();
             try(var connection=DriverManager.getConnection(url,PostgresTestDatabase.DATABASE.getUsername(),PostgresTestDatabase.DATABASE.getPassword());var statement=connection.createStatement();
                 var result=statement.executeQuery("SELECT (SELECT count(*) FROM loyalty.qr_identity_tokens) AS tokens,(SELECT count(*) FROM loyalty.audit_logs) AS audits,(SELECT SUM(signed_amount) FROM loyalty.point_transactions) AS points")) {
                 assertThat(result.next()).isTrue();assertThat(result.getLong("tokens")).isZero();assertThat(result.getLong("audits")).isEqualTo(1);assertThat(result.getLong("points")).isEqualTo(10);
+            }
+        });
+    }
+
+    @Test
+    void versionTenPreservesExistingQrReferencesWithoutSeedingResolutionsOrEvents() throws Exception {
+        withEmptyDatabase(url->{
+            atVersion(url,"9").migrate();var ids=seedLegacyIdentity(url);
+            byte[] bytes=new byte[32];new java.security.SecureRandom().nextBytes(bytes);
+            String jti=java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
+            try(var connection=DriverManager.getConnection(url,PostgresTestDatabase.DATABASE.getUsername(),PostgresTestDatabase.DATABASE.getPassword());
+                var insert=connection.prepareStatement("INSERT INTO loyalty.qr_identity_tokens(jti,customer_id,issued_at,expires_at,key_id,status) VALUES (?,?,'2026-10-14T12:00:00Z','2026-10-14T12:01:00Z','previous-key','ACTIVE')")) {
+                insert.setString(1,jti);insert.setObject(2,ids[1]);insert.executeUpdate();
+            }
+            var upgraded=flyway(url);assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(1);upgraded.validate();
+            assertThat(upgraded.migrate().migrationsExecuted).isZero();
+            try(var connection=DriverManager.getConnection(url,PostgresTestDatabase.DATABASE.getUsername(),PostgresTestDatabase.DATABASE.getPassword());var statement=connection.createStatement();
+                var result=statement.executeQuery("SELECT (SELECT count(*) FROM loyalty.qr_identity_tokens WHERE status='ACTIVE') AS tokens,(SELECT count(*) FROM loyalty.scan_resolutions) AS resolutions,(SELECT count(*) FROM loyalty.qr_scan_events) AS events")) {
+                assertThat(result.next()).isTrue();assertThat(result.getLong("tokens")).isEqualTo(1);assertThat(result.getLong("resolutions")).isZero();assertThat(result.getLong("events")).isZero();
             }
         });
     }
