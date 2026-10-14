@@ -122,6 +122,13 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
         return response(ApiErrorCode.VALIDATION_ERROR, fields, HttpHeaders.EMPTY, request);
     }
 
+    @ExceptionHandler(RateLimitException.class)
+    ResponseEntity<Object> rateLimit(RateLimitException exception, WebRequest request) {
+        var headers = new HttpHeaders();
+        headers.set(HttpHeaders.RETRY_AFTER, Long.toString(exception.retryAfter()));
+        return response(ApiErrorCode.RATE_LIMITED, List.of(), headers, request);
+    }
+
     @ExceptionHandler(ResourceNotFoundException.class)
     ResponseEntity<Object> notFound(ResourceNotFoundException exception, WebRequest request) {
         return response(ApiErrorCode.RESOURCE_NOT_FOUND, List.of(), HttpHeaders.EMPTY, request);
