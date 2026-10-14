@@ -56,6 +56,10 @@ abstract class StaffQrTestSupport {
     @Autowired QrTokenValidationService validator;
     @Autowired PlatformTransactionManager manager;
     @Autowired StaffQrService flow;
+    @Autowired com.amiraharcs.loyalty.qr.repository.ScanEventRepository history;
+    @Autowired StaffScanRateLimiter scanLimiter;
+    @Autowired ConfirmationFailureRateLimiter confirmationLimiter;
+    @MockitoSpyBean com.amiraharcs.loyalty.loyalty.repository.PointTransactionRepository pointTransactions;
     @Autowired com.amiraharcs.loyalty.store.repository.StoreRepository stores;
     @Autowired com.amiraharcs.loyalty.store.repository.StaffStoreRepository assignments;
     @Autowired com.amiraharcs.loyalty.auth.repository.UserRepository users;
@@ -71,7 +75,7 @@ abstract class StaffQrTestSupport {
     @AfterEach void clear() { SecurityContextHolder.clearContext(); }
     class Browser {
         final Map<String,Cookie> cookies = new HashMap<>();
-        final String ip = "192.0.2." + IPS.incrementAndGet();
+        String ip = "192.0.2." + IPS.incrementAndGet();
         UUID userId;
         String csrf;
         MvcResult send(MockHttpServletRequestBuilder builder, int expected) throws Exception {
