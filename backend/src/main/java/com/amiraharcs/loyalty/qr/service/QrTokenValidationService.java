@@ -10,7 +10,7 @@ import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-/** Internal identity resolution only. Future scan/confirmation services must enforce staff/store scope and recheck under locks. */
+/** Internal identity resolution only. The staff workflow enforces scope and rechecks source state under its account/token locks. */
 @Service
 public class QrTokenValidationService {
     private final QrTokenCodec codec;

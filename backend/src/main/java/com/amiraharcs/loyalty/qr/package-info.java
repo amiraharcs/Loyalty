@@ -1,5 +1,5 @@
 /**
- * Short-lived signed identity references and server-side token lifecycle.
- * Staff resolution/scan history are reserved for later issues; this module never awards points.
+ * Short-lived identity references, scoped staff resolution and transactional visit orchestration.
+ * The loyalty/visit modules own award invariants; scanning itself never awards points.
  */
 package com.amiraharcs.loyalty.qr;

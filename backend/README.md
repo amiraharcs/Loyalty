@@ -5,7 +5,8 @@ with PostgreSQL and Flyway. Issues #12–#15 add identity persistence, customer
 registration, server-side authentication sessions and explicit role enforcement.
 Issue #16 adds store persistence and staff-store scope services.
 Issues #17–#20 add the immutable ledger, atomic visit awards and admin corrections.
-Issue #21 adds signed temporary QR identity references. Other product APIs remain unimplemented.
+Issue #21 adds signed temporary QR identity references. Issue #22 connects staff
+QR resolution to secure visit confirmation. Other product APIs remain unimplemented.
 [P1 architecture](../docs/architecture/README.md) remains the source of truth.
 
 ## Local development
@@ -645,8 +646,8 @@ a managed account after the insert. The version field also supports explicit
 force-increment locking. Future services must deliberately handle transaction
 retries; do not use version alone as a substitute for the documented account lock.
 
-Issue #19 implements qualifying-visit earning, as documented below. Redemption,
-refund and admin mutation workflows remain deferred. Future authorized workflows
+Issue #19 implements qualifying-visit earning, as documented below. Redemption
+and refund workflows remain deferred; Issue #20 adds admin corrections. Authorized workflows
 must enforce nonnegative balances, sufficient points, source eligibility,
 idempotency and store scope while holding the account lock. V7 completes Visit
 source linkage and the earned-points snapshot. Redemption/reversal columns wait
@@ -721,34 +722,13 @@ date, confirmation time and awarded-points snapshot. Pages are bounded to 1–10
 HTTP wrappers must derive/authorize customer ownership; an internal UUID argument
 is not proof of permission. No public history endpoint is added.
 
-**Production `POST /api/v1/staff/visits` is deliberately absent.** Accepting
-arbitrary customer/store IDs from a staff browser would bypass the architecture's
-trusted customer resolution. The internal operation now awards points atomically, but does not yet
-consume a trusted resolution. Future production orchestration must verify
-and consume an unexpired staff/store-bound QR or authorized manual ScanResolution,
-apply idempotency and full current-state/concurrent-revocation safeguards, and
-compose the existing atomic Visit + configured EARN operation with resolution
-consumption in the same transaction. Issue #19 completes points integration;
-P5 owns QR/resolution. This internal method must not be wired straight
-to a controller. Its caller must establish the trusted resolution and complete
-those safeguards before a production confirmation route can be enabled.
-
-The Issue #18 checklist's staff-created endpoint is therefore intentionally
-deferred, rather than replaced with an insecure customerId payload. This phase
-added the visit foundation; Issue #19 now adds its atomic earning behavior.
-Streaks, QR/resolution, rewards, game, leaderboard and admin mutation workflows
-remain deferred.
-
-Tests run against disposable real PostgreSQL: mapping/relationships, account-owner
-integrity, unique daily qualification across stores, restrictive FKs, database/ORM
-immutability, bounded ordered history, caller rollback, current roles/account/store
-eligibility, self-service denial, clock/timezone/midnight/DST boundaries and
-concurrent duplicates. Two raw repository transactions both observe no visit and
-race their INSERTs to prove the unique constraint independently of account locking.
-A separate service race uses two staff/stores. A real cookie-session HTTP test
-confirms that an arbitrary identity/date payload cannot create a visit through the
-absent endpoint. Migration tests cover empty V6 and V5 → V6 without altering an
-existing point ledger; both profiles retain Hibernate validation.
+Production `POST /api/v1/staff/visits` now uses the trusted ScanResolution
+workflow documented in Issue #22 below. It accepts only a resolution ID and
+idempotency header, and composes this internal operation with source consumption,
+current-state checks and transactional events/audit. It never accepts arbitrary
+customer/store IDs, amounts or dates. Issue #18 originally deferred this route
+until trusted resolution existed; Issue #19 added its atomic earning operation.
+Streaks, rewards, game and leaderboard remain outside the visit foundation.
 
 ## Atomic qualifying-visit awards (Issue #19)
 
@@ -785,7 +765,7 @@ The ordinary clean/preproduction V6 database upgrades without seeding activity.
 `VisitService.confirmResolvedCustomer` preserves existing staff/store/customer
 eligibility checks, self-confirmation denial, caller-owned write transaction and
 `PESSIMISTIC_WRITE` account lock. The lock is taken before balance checks/writes;
-future resolution consumption must use the architecture's consistent lock order.
+the Issue #22 workflow follows the architecture's consistent lock order.
 After deriving the London date and checking daily uniqueness, it reads the ledger
 balance and checks the configured addition against safe-integer bounds **before**
 inserting the Visit. The Visit snapshots the configured award. The loyalty module
@@ -973,7 +953,7 @@ Security errors use the same DTO via `ApiErrorWriter` because they occur before
 MVC advice. Boot's fallback error settings also disable exception/message/trace
 exposure. MVC and security tests use controllers available only on the test
 classpath; production controllers implement registration, the authentication session lifecycle
-ADMIN points adjustments and customer QR issuance.
+ADMIN points adjustments, customer QR issuance and the staff scan/visit flow.
 
 ```sh
 ./mvnw -B -ntp -Dtest=ApiErrorTests test
@@ -1077,8 +1057,7 @@ only the newest successfully received token.
 The 201 response contains only `token`, `expiresAt` and `serverTime`, with
 `Cache-Control: no-store`. No Location is returned because no token-read endpoint
 exists. The QR is an identity reference, with no coupon, reward or payment authority.
-Issuance and validation create no visits or points entries. Frontend QR rendering
-and staff scanning are unchanged by this issue.
+Issuance and validation create no visits or points entries. Frontend QR rendering remains unchanged; staff scanning is documented below.
 
 Nimbus JOSE + JWT 10.10 signs JWS using **HS256 only**. The header contains `alg`,
 `kid` and a dedicated `typ=loyalty-qr+jwt`; the payload contains exactly `iss`,
@@ -1132,8 +1111,7 @@ rolls back both changes. This does not modify the ledger/account balance.
 ACTIVE means current, not necessarily unexpired: validity also requires server
 time before expiresAt. Expiry is derived instead of requiring a background status
 job. Replacement revokes even an already expired ACTIVE row. REVOKED is terminal;
-CONSUMED is reserved for the future confirmation workflow and is already rejected
-by validation. Database checks enforce a 60-second lifetime, whole-second
+CONSUMED is set by the staff confirmation workflow and is rejected by QR validation. Database checks enforce a 60-second lifetime, whole-second
 issuance, valid metadata/status/revocation and terminal lifecycle transitions.
 Indexes support current-customer lookup, customer history, jti and expiry queries.
 No automatic token deletion/retention job is added.
@@ -1142,11 +1120,11 @@ No automatic token deletion/retention job is added.
 the fixed algorithm/type/key, verifies the signature **before reading claims or
 looking up any customer**, then checks issuer, exact audience, minimal claims,
 server time, and matching active database metadata/current CUSTOMER state.
-It returns only the validated reference, customer UUID and expiry to future
+It returns only the validated reference, customer UUID and expiry to internal
 services. Sanitized internal failure reasons distinguish invalid, expired,
 revoked/consumed and inactive-customer outcomes; no crypto/parser cause or encoded
-token is retained in an exception. Issue #22 will define safe scan API mappings,
-apply STAFF/store scope and bind/recheck resolutions under transaction locks.
+token is retained in an exception. The Issue #22 workflow maps safe scan errors,
+applies STAFF/store scope and binds/rechecks resolutions under transaction locks.
 Validation here is a point-in-time check, not an authorization/confirmation grant.
 
 Issuance uses the existing bounded thread-safe sliding-window limiter:
@@ -1166,6 +1144,131 @@ normal operation. Use HTTPS and synchronized server clocks in production.
 ./mvnw -B -ntp -Dtest=QrTokenCodecTests,QrSigningConfigurationTests,QrIssuanceRateLimiterTests,QrIdentityTokenTests,MigrationTests test
 ./mvnw -B -ntp clean verify
 ```
+
+## Staff QR scanning and visit confirmation (Issue #22)
+
+Both endpoints require an active STAFF session, current explicit STAFF grant and
+CSRF. ADMIN alone is insufficient. Store assignment/store status are read from
+the database on each operation and rechecked after lock waits. Requests reject
+unknown fields; acting staff is always derived from the principal.
+
+### Resolve a QR
+
+`POST /api/v1/staff/scans` accepts only:
+
+```json
+{"token":"<encoded identity QR>","storeId":"<assigned-store UUID>"}
+```
+
+A 201 response with `Cache-Control: no-store` contains `scanResolutionId`,
+`expiresAt`, `displayName` and ledger-derived `balance`. It contains no email,
+customer/user ID, credentials, game/history data or invented streak. The scanner
+must be assigned to the active store. Staff cannot scan/confirm their own customer
+profile even when they hold both roles.
+
+The existing Issue #21 validator verifies the signature before trusting claims
+or customer lookup, and checks algorithm/key/issuer/audience/time/current customer.
+After acquiring the account/token locks the workflow refreshes and revalidates
+state to reject replacement or expiry during a lock wait. A ScanResolution binds
+the exact token/customer/staff/store and expires **120 seconds** after server
+creation time. Scanning creates no Visit/EARN, consumes no QR and changes no points.
+Repeated scans can create separate resolutions; only confirmation consumes the source.
+
+`V10__create_scan_resolutions.sql` creates the resolutions table and append-only
+`qr_scan_events` in one migration. Restrictive FKs include a composite token/customer
+binding; bindings and lifetime cannot change, and consumption can happen once,
+before the exclusive deadline. Parent token lifecycle supplies revocation: a
+replacement QR invalidates every unused resolution for the old token without a
+second revocation flag or bulk child update. Indexes support staff/store/expiry,
+token references and safe event queries. No cleanup job or event read API is added.
+
+The existing in-memory sliding-window infrastructure limits scanning attempts to
+**60/minute/staff**, plus **240/minute/socket IP**, with 429 and `Retry-After`.
+This counts invalid attempts too. Limits are per process/reset on restart; a
+multi-instance deployment needs shared/gateway enforcement. Untrusted forwarded
+headers cannot bypass the IP budget. The customer QR issuance limits remain unchanged.
+
+### Confirm the resolved visit
+
+`POST /api/v1/staff/visits` requires a UUID `Idempotency-Key` and accepts only:
+
+```json
+{"scanResolutionId":"<owned-resolution UUID>"}
+```
+
+No customer/store, amount, business date or actor is accepted in the body. The
+201 no-store response contains `visitId`, `confirmedAt`, `businessDate`,
+`earnedPoints` and `updatedBalance`, all server-derived. No Location is returned
+because a visit-by-ID read endpoint does not exist.
+
+Confirmation authorizes the resolution owner and current store assignment, checks
+customer eligibility, then serializes using this lock order:
+**idempotency key → LoyaltyAccount → QR token → ScanResolution**. The account lock
+is shared with issuance, adjustments and existing visit awards; token/resolution
+entities are refreshed after locking so cached pre-lock lifecycle values cannot
+permit replay. No remote call occurs under these locks.
+
+A naturally expired QR still supports a resolution created while it was valid,
+until that resolution's own two-minute deadline. Explicit revocation/replacement
+and consumption invalidate outstanding sources. Confirmation does not re-run the
+original QR expiry check or require retaining/reposting the raw token.
+
+One transaction creates the immutable Visit and its matching EARN using the
+existing VisitService, consumes resolution and QR, and appends the successful scan
+event, generic audit record and idempotency result. Any failure rolls everything
+back. One qualifying visit per customer/Europe-London date still applies across
+stores. Distinct resolutions racing for the same source cannot double-award;
+same-key concurrent calls share the original result.
+
+Idempotency uses the existing actor/operation/key scope and a hash of the resolution
+UUID, never the QR. Same key/body returns the original 201 snapshot, including after
+resolution expiry/consumption, without new business/event writes. A changed body
+returns `409 IDEMPOTENCY_KEY_REUSED`. Current identity, ownership, assignment,
+store and customer eligibility are checked before replaying a stored result.
+Existing minimum 24-hour/indefinite-until-cleanup retention remains unchanged.
+
+| HTTP/code | Meaning |
+| --- | --- |
+| 400 `VALIDATION_ERROR` / `MALFORMED_REQUEST` | Missing/unknown/invalid DTO fields or idempotency header |
+| 401 `UNAUTHENTICATED` | Missing/expired/disabled session |
+| 403 `FORBIDDEN` | Wrong role, self-service or CSRF denial |
+| 404 `RESOURCE_NOT_FOUND` | Missing/foreign resolution, inactive/unassigned store or ineligible customer |
+| 409 `QR_INVALID` | Malformed, forged, unknown-key/unknown-record or invalid-claims QR; no crypto distinction leaked |
+| 409 `QR_EXPIRED` / `QR_REVOKED` | Expired QR at scan, or explicitly unavailable source |
+| 409 `SCAN_RESOLUTION_EXPIRED` / `SCAN_RESOLUTION_CONSUMED` | Expired or already used resolution |
+| 409 `VISIT_ALREADY_RECORDED` | Customer already qualified today, including another resolution winning the race |
+| 429 `RATE_LIMITED` | Scanning budget exhausted; Retry-After supplied |
+
+### Events, privacy and verification
+
+Scan events are JDBC append-only records with safe token jti (nullable on invalid
+input), staff/store references where safely known, server time, outcome/reason code
+and server requestId. Successful resolution/confirmation events commit in the
+business transaction; confirmation also uses the existing generic AuditService.
+Rejected domain attempts are persisted in a separate transaction **after rollback**,
+so duplicate/replay/expired/scope failure events survive without partial awards.
+Malformed DTOs and pre-controller authentication/CSRF denials remain handled by
+shared security/MVC infrastructure. If the database is unavailable, rejected-event
+persistence falls back to a safe correlated server log without masking the original
+response. Foreign-resolution failures retain no other staff's token/store context.
+
+The raw encoded QR is never persisted or put in event/audit/error metadata. Its
+request DTO has a redacted toString and a write-only token field. Keep application,
+framework, JDBC bind, proxy and APM request-body tracing disabled/redacted for real
+QR and credentials. Never put the token in a URL or request ID. Existing problem
+responses expose safe static details, never parser/crypto/SQL exception text.
+
+Tests exercise real PostgreSQL cookie sessions/CSRF, crypto validation reuse,
+120-second/natural-expiry rules, cross-staff/store scope, immutable constraints,
+rollback after event/audit/retry writes and coordinated confirmation races.
+
+```sh
+./mvnw -B -ntp -Dtest=StaffQrScanTests,StaffQrConfirmationTests,StaffQrPersistenceTests,StaffScanRateLimiterTests,MigrationTests test
+./mvnw -B -ntp clean verify
+```
+
+Manual lookup, ScanResolution front-end integration, streaks and Issue #23 remain
+out of scope. Issue #21's internal validator remains non-public.
 
 ## References
 
