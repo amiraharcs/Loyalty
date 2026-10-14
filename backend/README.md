@@ -4,7 +4,8 @@ Java 21, Spring Boot 4.1.1 and Maven. Issues #8–#11 establish a modular monoli
 with PostgreSQL and Flyway. Issues #12–#15 add identity persistence, customer
 registration, server-side authentication sessions and explicit role enforcement.
 Issue #16 adds store persistence and staff-store scope services.
-Other product APIs remain unimplemented.
+Issues #17–#20 add the immutable ledger, atomic visit awards and admin corrections.
+Issue #21 adds signed temporary QR identity references. Other product APIs remain unimplemented.
 [P1 architecture](../docs/architecture/README.md) remains the source of truth.
 
 ## Local development
@@ -15,7 +16,8 @@ From the repository root:
 ```sh
 cd backend
 cp .env.example .env
-# Edit .env if needed; these credentials are for local development only.
+# Set QR_SIGNING_KEY_BASE64 in .env using a fresh `openssl rand -base64 32`.
+# Other credentials here are for local development only.
 docker compose up -d --wait
 set -a
 . ./.env
@@ -971,7 +973,7 @@ Security errors use the same DTO via `ApiErrorWriter` because they occur before
 MVC advice. Boot's fallback error settings also disable exception/message/trace
 exposure. MVC and security tests use controllers available only on the test
 classpath; production controllers implement registration, the authentication session lifecycle
-and ADMIN points adjustments.
+ADMIN points adjustments and customer QR issuance.
 
 ```sh
 ./mvnw -B -ntp -Dtest=ApiErrorTests test
@@ -1057,6 +1059,111 @@ V7 migration preservation and concurrent deductions/retries:
 
 ```sh
 ./mvnw -B -ntp -Dtest=AdminPointsAdjustmentTests,MigrationTests test
+./mvnw -B -ntp clean verify
+```
+
+## Temporary customer identity QR (Issue #21)
+
+`POST /api/v1/customers/me/qr-tokens` requires an active authenticated CUSTOMER,
+CSRF and a provisioned customer profile/loyalty account. STAFF-only and ADMIN-only
+accounts are denied; there is no role hierarchy. Identity is derived from the
+server session and current grants are rechecked after account locking. The request
+must have **no body and no query/form parameters**, including no `{}`. It accepts
+no identity, amount, time or signing fields. Unlike adjustment/visit operations,
+QR issuance does not require an Idempotency-Key: each successful call replaces
+the previous token. A network retry can supersede the first response; display
+only the newest successfully received token.
+
+The 201 response contains only `token`, `expiresAt` and `serverTime`, with
+`Cache-Control: no-store`. No Location is returned because no token-read endpoint
+exists. The QR is an identity reference, with no coupon, reward or payment authority.
+Issuance and validation create no visits or points entries. Frontend QR rendering
+and staff scanning are unchanged by this issue.
+
+Nimbus JOSE + JWT 10.10 signs JWS using **HS256 only**. The header contains `alg`,
+`kid` and a dedicated `typ=loyalty-qr+jwt`; the payload contains exactly `iss`,
+`aud`, `iat`, `exp` and a cryptographically random 256-bit Base64URL `jti`. There
+is no email, display name, profile/user ID, role, status or balance in the token.
+Timestamps are UTC whole seconds and `exp = iat + 60 seconds`. Expiry is exclusive,
+with no grace window; future issuance times and noninteger/incorrect lifetimes
+are rejected using the injected server clock. `serverTime` is the captured issuance
+instant rounded down to whole seconds to match the signed NumericDates.
+
+### Signing environment and rotation
+
+All profiles fail startup on missing/invalid QR signing configuration; there is
+no shared development secret or automatically generated production fallback.
+Keep these settings server-side, outside source control and Vite:
+
+| Variable | Required value |
+| --- | --- |
+| `QR_ISSUER` | Fixed deployment issuer, consistent across all instances |
+| `QR_AUDIENCE` | Fixed dedicated QR identity audience |
+| `QR_ACTIVE_KEY_ID` | Active ID, 1–64 ASCII letters/digits or `.`, `_`, `-` |
+| `QR_SIGNING_KEY_BASE64` | Standard Base64 encoding of a cryptographically random 32–128 byte key |
+| `QR_VERIFICATION_KEYS` | Optional JSON object mapping up to ten **old** key IDs to Base64 keys |
+
+Generate a fresh key locally with `openssl rand -base64 32` and paste it into the
+ignored `backend/.env`, then export that file as shown above. Production keys
+come from secret storage. Examples contain no usable signing material. A length
+check cannot prove entropy: use the generator, not a human password. Configuration
+errors discard parser causes so startup logs cannot echo secret values.
+
+For rotation, deploy the old active ID/key into the verification ring, set a new
+active ID/key, and keep issuer/audience stable. New tokens use only the active key;
+unexpired tokens signed by configured old keys still verify against their stored
+key ID. Retain an old verification key for at least 60 seconds after the last
+instance stops issuing with it, allowing for rollout timing. Removing a key
+immediately invalidates tokens using it. Reject an active ID repeated in the old
+ring, unknown IDs, `none`, HS384/HS512/RS256 substitutions and extra JOSE headers.
+No remote key discovery or KMS is introduced. Coordinate keys and clocks across
+instances; changing issuer/audience also invalidates outstanding tokens.
+
+### Persistence, replacement and internal validation
+
+`V9__create_qr_identity_tokens.sql` adds QrIdentityToken with `jti` as its primary
+key, restrictive CustomerProfile FK, immutable issuance/expiry/key metadata,
+status and optional revokedAt. The full encoded JWS is never persisted. A partial
+unique index permits only one ACTIVE row per customer; issuance serializes on the
+existing LoyaltyAccount PESSIMISTIC_WRITE lock, revokes prior ACTIVE rows, inserts
+the replacement and signs within one transaction. Signing/persistence failure
+rolls back both changes. This does not modify the ledger/account balance.
+
+ACTIVE means current, not necessarily unexpired: validity also requires server
+time before expiresAt. Expiry is derived instead of requiring a background status
+job. Replacement revokes even an already expired ACTIVE row. REVOKED is terminal;
+CONSUMED is reserved for the future confirmation workflow and is already rejected
+by validation. Database checks enforce a 60-second lifetime, whole-second
+issuance, valid metadata/status/revocation and terminal lifecycle transitions.
+Indexes support current-customer lookup, customer history, jti and expiry queries.
+No automatic token deletion/retention job is added.
+
+`QrTokenValidationService.validate` is internal only. It bounds input, requires
+the fixed algorithm/type/key, verifies the signature **before reading claims or
+looking up any customer**, then checks issuer, exact audience, minimal claims,
+server time, and matching active database metadata/current CUSTOMER state.
+It returns only the validated reference, customer UUID and expiry to future
+services. Sanitized internal failure reasons distinguish invalid, expired,
+revoked/consumed and inactive-customer outcomes; no crypto/parser cause or encoded
+token is retained in an exception. Issue #22 will define safe scan API mappings,
+apply STAFF/store scope and bind/recheck resolutions under transaction locks.
+Validation here is a point-in-time check, not an authorization/confirmation grant.
+
+Issuance uses the existing bounded thread-safe sliding-window limiter:
+**30/minute/customer**, plus **120/minute/IP** based on the socket remote address,
+with 429 `RATE_LIMITED`, `Retry-After` and no-store problem JSON. Customer limits
+also apply to direct service calls. Budgets are per process and reset on restart,
+matching existing authentication infrastructure; multi-instance rollout needs a
+shared limiter or gateway enforcement to provide a cluster-wide budget. No
+forwarded header from an untrusted caller changes the IP budget.
+
+Never log, cache, put in URLs or persist the encoded QR, even in diagnostics or
+proxy response-body logs. The response DTO redacts its `toString`; parsing/signing
+errors are sanitized and framework body/bind TRACE logging remains disabled in
+normal operation. Use HTTPS and synchronized server clocks in production.
+
+```sh
+./mvnw -B -ntp -Dtest=QrTokenCodecTests,QrSigningConfigurationTests,QrIssuanceRateLimiterTests,QrIdentityTokenTests,MigrationTests test
 ./mvnw -B -ntp clean verify
 ```
 
