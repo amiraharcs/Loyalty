@@ -115,7 +115,7 @@ class StaffQrConfirmationTests extends StaffQrTestSupport {
                 .append(eq(setup.staff().userId),eq("VISIT_CONFIRMED"),anyString(),any(),any(),any(),anyString());
             case "event"->doAnswer(call->{call.callRealMethod();throw new IllegalStateException("Synthetic failure");})
                 .when(org.springframework.test.util.AopTestUtils.<ScanEventService>getUltimateTargetObject(events))
-                .success(anyString(),eq(setup.staff().userId),any(),eq("VISIT_CONFIRMED"),any());
+                .success(anyString(),eq(setup.staff().userId),any(),eq(com.amiraharcs.loyalty.qr.model.ScanEventOutcome.VISIT_CONFIRMED),any(),any(),any());
             case "idempotency"->doAnswer(call->{call.callRealMethod();throw new IllegalStateException("Synthetic failure");})
                 .when(org.springframework.test.util.AopTestUtils.<com.amiraharcs.loyalty.common.idempotency.IdempotencyService>getUltimateTargetObject(idempotency))
                 .complete(eq(setup.staff().userId),anyString(),eq(key),anyString(),anyString(),any());

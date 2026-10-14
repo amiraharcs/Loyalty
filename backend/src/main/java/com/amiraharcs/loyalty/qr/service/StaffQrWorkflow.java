@@ -63,7 +63,7 @@ public class StaffQrWorkflow {
         if (now.isBefore(token.getIssuedAt())) { throw new QrFlowException(ApiErrorCode.QR_INVALID); }
         var resolution=new ScanResolution(token,entities.getReference(User.class,staffId),entities.getReference(Store.class,request.storeId()),now);
         entities.persist(resolution); entities.flush();
-        events.success(token.getJti(),staffId,request.storeId(),"RESOLUTION_CREATED",requestId);
+        events.success(token.getJti(),staffId,request.storeId(),ScanEventOutcome.RESOLUTION_CREATED,requestId,resolution.getId(),null);
         return new StaffScanResponse(resolution.getId(),resolution.getExpiresAt(),token.getCustomer().getDisplayName(),accounts.currentBalance(identity.customerId()));
     }
     public StaffVisitResponse confirm(UUID resolutionId, UUID key, UUID requestId) {
@@ -97,7 +97,7 @@ public class StaffQrWorkflow {
             throw new QrFlowException(ApiErrorCode.SCAN_RESOLUTION_EXPIRED);
         }
         resolution.consume(result.confirmedAt()); token.consume(); entities.flush();
-        events.success(token.getJti(),staffId,storeId,"VISIT_CONFIRMED",requestId);
+        events.success(token.getJti(),staffId,storeId,ScanEventOutcome.VISIT_CONFIRMED,requestId,resolutionId,result.visitId());
         audit.append(staffId,"VISIT_CONFIRMED","VISIT",result.visitId(),result.confirmedAt(),requestId,
                 json.writeValueAsString(Map.of("scanResolutionId",resolutionId,"storeId",storeId,"earnedPoints",result.earnedPoints())));
         idempotency.complete(staffId,OPERATION,key,hash,json.writeValueAsString(result),result.confirmedAt());

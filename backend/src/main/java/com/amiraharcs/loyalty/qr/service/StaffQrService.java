@@ -30,13 +30,21 @@ public class StaffQrService {
     private final ScanEventService events;
     private final StaffScanRateLimiter limiter;
     private final TransactionTemplate transactions;
+    private final ConfirmationFailureRateLimiter confirmationLimiter;
     public StaffQrService(StaffQrWorkflow workflow,StaffStoreScopeService scope,ScanEventService events,
-            StaffScanRateLimiter limiter,PlatformTransactionManager manager) {
-        this.workflow=workflow;this.scope=scope;this.events=events;this.limiter=limiter;this.transactions=new TransactionTemplate(manager);
+            StaffScanRateLimiter limiter,PlatformTransactionManager manager,ConfirmationFailureRateLimiter confirmationLimiter) {
+        this.workflow=workflow;this.scope=scope;this.events=events;this.limiter=limiter;this.transactions=new TransactionTemplate(manager);this.confirmationLimiter=confirmationLimiter;
     }
     public StaffScanResponse scan(@NotNull @Valid StaffScanRequest request,@NotNull UUID requestId) {
+        return scanAttempt(request,requestId,null);
+    }
+    public StaffScanResponse scan(@NotNull @Valid StaffScanRequest request,@NotNull UUID requestId,@jakarta.validation.constraints.NotBlank String address) {
+        return scanAttempt(request,requestId,address);
+    }
+    private StaffScanResponse scanAttempt(StaffScanRequest request,UUID requestId,String address) {
         UUID staffId=scope.currentStaffId();
         try {
+            if (address!=null) { limiter.reserveAddress(address); }
             limiter.reserveStaff(staffId);
             return transactions.execute(status->workflow.scan(request,requestId));
         } catch (InvalidQrTokenException invalid) {
@@ -51,16 +59,36 @@ public class StaffQrService {
         }
     }
     public StaffVisitResponse confirm(@NotNull @Valid VisitConfirmationRequest request,@NotNull UUID key,@NotNull UUID requestId) {
+        return confirmAttempt(request,key,requestId,null);
+    }
+    public StaffVisitResponse confirm(@NotNull @Valid VisitConfirmationRequest request,@NotNull UUID key,@NotNull UUID requestId,
+            @jakarta.validation.constraints.NotBlank String address) {
+        return confirmAttempt(request,key,requestId,address);
+    }
+    private StaffVisitResponse confirmAttempt(VisitConfirmationRequest request,UUID key,UUID requestId,String address) {
         UUID staffId=scope.currentStaffId();
-        try { return transactions.execute(status->workflow.confirm(request.scanResolutionId(),key,requestId)); }
+        try {
+            var reservation=confirmationLimiter.reserve(staffId,address);
+            var result=transactions.execute(status->workflow.confirm(request.scanResolutionId(),key,requestId));
+            confirmationLimiter.succeeded(reservation);
+            return result;
+        }
         catch (RuntimeException failure) {
-            try { events.confirmationFailure(staffId,request.scanResolutionId(),code(failure).name(),requestId); }
+            try { events.confirmationFailure(staffId,request.scanResolutionId(),code(failure),requestId); }
             catch (RuntimeException unavailable) { LOG.error("Scan event persistence failed actorId={} requestId={} outcome={}",staffId,requestId,code(failure)); }
             throw failure;
         }
     }
     private void failure(UUID staffId,UUID storeId,ApiErrorCode code,UUID requestId) {
-        try { events.failure(staffId,storeId,code.name(),requestId); }
+        try {
+            // Validate before entering the independent writer transaction: a denied scope query must not mark it rollback-only.
+            UUID trustedStore=null;
+            if (storeId!=null) {
+                try { trustedStore=scope.requireAssignedStore(storeId).id(); }
+                catch (ResourceNotFoundException | AccessDeniedException | AuthenticationException denied) { /* No authorised store context. */ }
+            }
+            events.failure(staffId,trustedStore,code,requestId);
+        }
         catch (RuntimeException unavailable) {
             // Preserve the original safe response; no request/exception text is logged.
             LOG.error("Scan event persistence failed actorId={} requestId={} outcome={}",staffId,requestId,code);

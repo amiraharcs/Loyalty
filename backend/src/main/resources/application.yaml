@@ -102,3 +102,5 @@ loyalty:
     active-key-id: ${QR_ACTIVE_KEY_ID:}
     signing-key-base64: ${QR_SIGNING_KEY_BASE64:}
     verification-keys: ${QR_VERIFICATION_KEYS:}
+    confirmation-failure-limit: ${QR_CONFIRM_FAILURE_LIMIT:60}
+    confirmation-ip-failure-limit: ${QR_CONFIRM_IP_FAILURE_LIMIT:240}

@@ -36,7 +36,7 @@ class MigrationTests {
     void migratesEmptyDatabaseWithOnlyImplementedDomainAndSessionTablesAndCanRunAgain() throws Exception {
         withEmptyDatabase(url -> {
             var flyway = flyway(url);
-            assertThat(flyway.migrate().migrationsExecuted).isEqualTo(10);
+            assertThat(flyway.migrate().migrationsExecuted).isEqualTo(11);
             flyway.validate();
             assertThat(flyway.migrate().migrationsExecuted).isZero();
             try (var connection = DriverManager.getConnection(url,
@@ -68,7 +68,7 @@ class MigrationTests {
                 insert.setObject(1, identity);
                 insert.executeUpdate();
             }
-            assertThat(flyway(url).migrate().migrationsExecuted).isEqualTo(7);
+            assertThat(flyway(url).migrate().migrationsExecuted).isEqualTo(8);
             try (var connection = DriverManager.getConnection(url,
                     PostgresTestDatabase.DATABASE.getUsername(), PostgresTestDatabase.DATABASE.getPassword());
                  var statement = connection.createStatement();
@@ -103,7 +103,7 @@ class MigrationTests {
                 }
             }
             var migrated = flyway(url);
-            assertThat(migrated.migrate().migrationsExecuted).isEqualTo(6);
+            assertThat(migrated.migrate().migrationsExecuted).isEqualTo(7);
             migrated.validate();
             assertThat(migrated.migrate().migrationsExecuted).isZero();
             try (var connection = DriverManager.getConnection(url,
@@ -174,7 +174,7 @@ class MigrationTests {
                         + UUID.randomUUID() + "','" + ids[2] + "',10,'ADJUSTMENT','" + ids[0] + "','Synthetic baseline',now())");
             }
             var upgraded = flyway(url);
-            assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(4); upgraded.validate();
+            assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(5); upgraded.validate();
             assertThat(upgraded.migrate().migrationsExecuted).isZero();
             try (var connection = DriverManager.getConnection(url, PostgresTestDatabase.DATABASE.getUsername(),
                     PostgresTestDatabase.DATABASE.getPassword()); var statement = connection.createStatement();
@@ -237,11 +237,40 @@ class MigrationTests {
                 var insert=connection.prepareStatement("INSERT INTO loyalty.qr_identity_tokens(jti,customer_id,issued_at,expires_at,key_id,status) VALUES (?,?,'2026-10-14T12:00:00Z','2026-10-14T12:01:00Z','previous-key','ACTIVE')")) {
                 insert.setString(1,jti);insert.setObject(2,ids[1]);insert.executeUpdate();
             }
-            var upgraded=flyway(url);assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(1);upgraded.validate();
+            var upgraded=atVersion(url,"10");assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(1);upgraded.validate();
             assertThat(upgraded.migrate().migrationsExecuted).isZero();
             try(var connection=DriverManager.getConnection(url,PostgresTestDatabase.DATABASE.getUsername(),PostgresTestDatabase.DATABASE.getPassword());var statement=connection.createStatement();
                 var result=statement.executeQuery("SELECT (SELECT count(*) FROM loyalty.qr_identity_tokens WHERE status='ACTIVE') AS tokens,(SELECT count(*) FROM loyalty.scan_resolutions) AS resolutions,(SELECT count(*) FROM loyalty.qr_scan_events) AS events")) {
                 assertThat(result.next()).isTrue();assertThat(result.getLong("tokens")).isEqualTo(1);assertThat(result.getLong("resolutions")).isZero();assertThat(result.getLong("events")).isZero();
+            }
+        });
+    }
+
+    @Test
+    void versionElevenPreservesImmutableLegacyEventsAndAddsOperationalIndexes() throws Exception {
+        withEmptyDatabase(url->{
+            atVersion(url,"10").migrate();var ids=seedLegacyIdentity(url);UUID event=UUID.randomUUID(),request=UUID.randomUUID();
+            try(var connection=DriverManager.getConnection(url,PostgresTestDatabase.DATABASE.getUsername(),PostgresTestDatabase.DATABASE.getPassword());
+                var insert=connection.prepareStatement("INSERT INTO loyalty.qr_scan_events(id,staff_user_id,occurred_at,outcome,reason_code,request_id) VALUES (?,?,'2026-10-14T12:00:00Z','REJECTED','QR_INVALID',?)")) {
+                insert.setObject(1,event);insert.setObject(2,ids[0]);insert.setObject(3,request);insert.executeUpdate();
+            }
+            var upgraded=flyway(url);assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(1);upgraded.validate();
+            assertThat(upgraded.migrate().migrationsExecuted).isZero();
+            try(var connection=DriverManager.getConnection(url,PostgresTestDatabase.DATABASE.getUsername(),PostgresTestDatabase.DATABASE.getPassword());var statement=connection.createStatement();
+                var result=statement.executeQuery("SELECT * FROM loyalty.qr_scan_events")) {
+                assertThat(result.next()).isTrue();assertThat(result.getObject("id",UUID.class)).isEqualTo(event);
+                assertThat(result.getObject("request_id",UUID.class)).isEqualTo(request);assertThat(result.getString("reason_code")).isEqualTo("QR_INVALID");
+                assertThat(result.getString("outcome")).isEqualTo("REJECTED");assertThat(result.getObject("resolution_id")).isNull();assertThat(result.getObject("visit_id")).isNull();
+                assertThat(result.next()).isFalse();
+            }
+            try(var connection=DriverManager.getConnection(url,PostgresTestDatabase.DATABASE.getUsername(),PostgresTestDatabase.DATABASE.getPassword());var statement=connection.createStatement();
+                var result=statement.executeQuery("SELECT indexname,indexdef FROM pg_indexes WHERE schemaname='loyalty' AND tablename='qr_scan_events'")) {
+                var names=new java.util.HashSet<String>();while(result.next()){names.add(result.getString(1));}
+                assertThat(names).contains("ix_scan_event_staff_time","ix_scan_event_store_time","ix_scan_event_outcome_time","ix_scan_event_token_time","ix_scan_event_request");
+            }
+            try(var connection=DriverManager.getConnection(url,PostgresTestDatabase.DATABASE.getUsername(),PostgresTestDatabase.DATABASE.getPassword());var statement=connection.createStatement()) {
+                assertThatThrownBy(()->statement.executeUpdate("DELETE FROM loyalty.qr_scan_events"))
+                        .isInstanceOf(java.sql.SQLException.class).hasMessageContaining("append-only");
             }
         });
     }
