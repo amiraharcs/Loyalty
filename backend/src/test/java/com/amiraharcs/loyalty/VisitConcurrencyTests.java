@@ -31,6 +31,7 @@ class VisitConcurrencyTests extends VisitTestSupport {
         })).isInstanceOf(IllegalStateException.class);
         assertThat(service.history(setup.customer().getId(), 0, 10)).isEmpty();
         assertThat(loyalty.currentBalance(setup.customer().getId())).isZero();
+        assertThat(streaks.snapshot(setup.customer().getId(), Visit.businessDateAt(NOW)).currentStreak()).isZero();
     }
 
     @Test
@@ -47,6 +48,10 @@ class VisitConcurrencyTests extends VisitTestSupport {
         assertThat(service.history(setup.customer().getId(), 0, 10).getTotalElements()).isEqualTo(1);
         assertThat(loyalty.currentBalance(setup.customer().getId())).isEqualTo(100);
         assertThat(jdbc.queryForObject("SELECT count(*) FROM loyalty.point_transactions WHERE account_id = ?", Long.class, setup.account().getId())).isEqualTo(1);
+        var streak = streaks.snapshot(setup.customer().getId(), Visit.businessDateAt(NOW));
+        assertThat(streak.currentStreak()).isEqualTo(1);
+        assertThat(streak.longestStreak()).isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT version FROM loyalty.streaks WHERE customer_id=?",Long.class,setup.customer().getId())).isEqualTo(1);
     }
 
     @Test

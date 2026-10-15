@@ -23,7 +23,7 @@ final class PostgresTestDatabase {
         registry.add("DB_USERNAME", DATABASE::getUsername);
         registry.add("DB_PASSWORD", DATABASE::getPassword);
         // Cached Spring contexts share this container; keep their pools below its connection cap.
-        registry.add("DB_POOL_SIZE", () -> "5");
+        registry.add("DB_POOL_SIZE", () -> "3");
         // This disposable local fixture has no TLS; production defaults to verify-full.
         registry.add("DB_SSL_MODE", () -> "disable");
         registry.add("DB_MIGRATION_URL", DATABASE::getJdbcUrl);

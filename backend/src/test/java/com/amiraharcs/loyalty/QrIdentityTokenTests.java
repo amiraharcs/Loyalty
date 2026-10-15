@@ -160,6 +160,7 @@ class QrIdentityTokenTests {
     @Test void missingProfileAndMissingLoyaltyAccountAreNotFound() throws Exception {
         var browser=login(RoleCode.CUSTOMER);var customer=customer(browser);
         jdbc.update("DELETE FROM loyalty.loyalty_accounts WHERE customer_id=?",customer);request(browser,404);
+        jdbc.update("DELETE FROM loyalty.streaks WHERE customer_id=?",customer);
         jdbc.update("DELETE FROM loyalty.customer_profiles WHERE id=?",customer);request(browser,404);
     }
     @Test void roleRemovalAndDisabledAccountRejectIssuanceAndValidation() throws Exception {

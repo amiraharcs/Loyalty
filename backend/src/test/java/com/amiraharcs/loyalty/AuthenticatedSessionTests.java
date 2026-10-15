@@ -210,6 +210,8 @@ class AuthenticatedSessionTests {
         String email = registered();
         UUID id = userId(email);
         // This test identity has no ledger history; production history cannot be cascaded away.
+        jdbc.update("DELETE FROM loyalty.streaks WHERE customer_id IN "
+                + "(SELECT id FROM loyalty.customer_profiles WHERE user_id = ?)", id);
         jdbc.update("DELETE FROM loyalty.loyalty_accounts WHERE customer_id IN "
                 + "(SELECT id FROM loyalty.customer_profiles WHERE user_id = ?)", id);
         jdbc.update("DELETE FROM loyalty.customer_profiles WHERE user_id = ?", id);

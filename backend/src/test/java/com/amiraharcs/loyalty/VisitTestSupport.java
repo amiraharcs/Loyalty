@@ -41,6 +41,7 @@ abstract class VisitTestSupport {
     @Autowired CustomerProfileRepository profiles;
     @Autowired LoyaltyAccountRepository accounts;
     @Autowired LoyaltyAccountService loyalty;
+    @Autowired com.amiraharcs.loyalty.loyalty.service.StreakService streaks;
     @Autowired StoreRepository stores;
     @Autowired StaffStoreRepository assignments;
     @MockitoSpyBean VisitRepository visits;
@@ -63,7 +64,10 @@ abstract class VisitTestSupport {
         return users.save(new User(UUID.randomUUID() + "@example.org", "synthetic-hash", AccountStatus.ACTIVE, CREATED, catalogue));
     }
     LoyaltyAccount customer() {
-        return accounts.save(new LoyaltyAccount(profiles.save(new CustomerProfile(user(RoleCode.CUSTOMER), "Member", "Member", true)), CREATED));
+        return new org.springframework.transaction.support.TransactionTemplate(manager).execute(tx -> {
+            var profile=profiles.save(new CustomerProfile(user(RoleCode.CUSTOMER), "Member", "Member", true));
+            var account=accounts.save(new LoyaltyAccount(profile,CREATED));streaks.createForRegistration(profile.getId());return account;
+        });
     }
     Store assignedStore(User staff, StoreStatus status) {
         var store = stores.save(new Store("Synthetic shop", "Synthetic address", status, CREATED));

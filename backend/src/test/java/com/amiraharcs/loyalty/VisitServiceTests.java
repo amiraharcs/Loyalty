@@ -33,6 +33,7 @@ class VisitServiceTests extends VisitTestSupport {
         assertThat(result.confirmedAt()).isEqualTo(NOW);
         assertThat(result.earnedPoints()).isEqualTo(100);
         assertThat(result.balance()).isEqualTo(100);
+        assertThat(streaks.snapshot(setup.customer().getId(), result.businessDate()).currentStreak()).isEqualTo(1);
         assertThat(loyalty.currentBalance(setup.customer().getId())).isEqualTo(100);
         assertThat(jdbc.queryForObject("SELECT count(*) FROM loyalty.point_transactions WHERE account_id = ?", Long.class, setup.account().getId())).isEqualTo(1);
     }
@@ -147,6 +148,7 @@ class VisitServiceTests extends VisitTestSupport {
         var result = service.confirmResolvedCustomer(setup.customer().getId(), setup.store().getId());
         assertThat(result.businessDate()).isEqualTo(LocalDate.parse(expectedDate));
         assertThat(result.confirmedAt()).isEqualTo(Instant.parse(instant).truncatedTo(java.time.temporal.ChronoUnit.MICROS));
+        assertThat(streaks.snapshot(setup.customer().getId(), LocalDate.parse(expectedDate)).currentStreak()).isEqualTo(1);
     }
 
     @Test
@@ -155,6 +157,7 @@ class VisitServiceTests extends VisitTestSupport {
         at(Instant.parse("2026-07-01T22:59:59Z")); var first = service.confirmResolvedCustomer(setup.customer().getId(), setup.store().getId());
         at(Instant.parse("2026-07-01T23:00:00Z")); var second = service.confirmResolvedCustomer(setup.customer().getId(), setup.store().getId());
         assertThat(second.businessDate()).isEqualTo(first.businessDate().plusDays(1));
+        assertThat(streaks.snapshot(setup.customer().getId(), second.businessDate()).currentStreak()).isEqualTo(2);
     }
 
     @Test
@@ -163,5 +166,6 @@ class VisitServiceTests extends VisitTestSupport {
         at(Instant.parse("2026-10-25T00:30:00Z")); service.confirmResolvedCustomer(setup.customer().getId(), setup.store().getId());
         at(Instant.parse("2026-10-25T01:30:00Z"));
         assertThatThrownBy(() -> service.confirmResolvedCustomer(setup.customer().getId(), setup.store().getId())).isInstanceOf(VisitAlreadyRecordedException.class);
+        assertThat(streaks.snapshot(setup.customer().getId(), LocalDate.of(2026,10,25)).currentStreak()).isEqualTo(1);
     }
 }
