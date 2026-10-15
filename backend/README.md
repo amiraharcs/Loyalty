@@ -1268,8 +1268,8 @@ rollback after event/audit/retry writes and coordinated confirmation races.
 ./mvnw -B -ntp clean verify
 ```
 
-Manual lookup, ScanResolution front-end integration, streaks and Issue #23 remain
-out of scope. Issue #21's internal validator remains non-public.
+Manual lookup and ScanResolution front-end integration remain out of scope
+for Issue #22. Later issue sections below describe history controls and streaks. Issue #21's internal validator remains non-public.
 
 ## QR history and abuse controls (Issue #23)
 
@@ -1367,7 +1367,71 @@ Existing natural-expiry/revocation, crypto, auth and append-only tests remain.
 ```
 
 No scan-history browsing API/UI, manual lookup, distributed limiter, retention
-job, streak calculation or Issue #24 work is included.
+job or streak calculation is included in Issue #23; streaks follow below.
+
+## Visit streaks (Issue #24)
+
+A streak counts consecutive qualifying **Europe/London business dates**, not
+elapsed 24-hour periods. Only confirmed immutable Visits count. The first date
+starts at 1; the immediately following date increments; a gap resets the stored
+current count to 1 on the next Visit. Repeating a date does not increment (the
+Visit uniqueness rule normally rejects that confirmation). Longest count and
+last qualifying date remain historical. Calendar-date arithmetic handles both
+BST/GMT transitions and London midnight; the injected server Clock is authoritative.
+
+`loyalty.streaks` is a maintained projection with a shared customer-profile primary
+key, current/longest counts, last qualifying date, and optimistic version. V12
+creates it with restrictive ownership and state/count constraints. Registration
+creates an empty row in the same transaction as User, CUSTOMER grant, profile and
+account. V12 backfills every existing profile from its real Visit date islands:
+the latest run supplies current count/date, the longest run supplies longest count,
+and customers without Visits get an empty row. Backfill uses date order, never
+insertion order or the deployment date; Flyway records it once and validates it on
+subsequent startup. Existing Visit/EARN history remains untouched.
+
+Confirmation updates Visit, matching EARN and Streak within the existing transaction,
+under the same customer/account pessimistic lock, before QR/resolution consumption
+and successful audit/event/idempotency writes commit. No new lock ordering is added.
+A projection or later workflow failure rolls everything back. Optimistic versioning
+also detects conflicting projection writes. Missing state fails closed instead of
+inventing history. Normal runtime only confirms current server-date Visits; an
+older date than the last projected date is rejected with `409 CONFLICT`. Historical
+imports/corrections would need a separately designed projection rebuild and are not
+supported by this endpoint. Never insert historical Visits behind the projection.
+
+`GET /api/v1/customers/me/streak` requires an active, explicit CUSTOMER grant and
+resolves ownership from the authenticated session. STAFF/ADMIN alone cannot read it.
+No customer/date query parameters or mutation routes are accepted. The response is
+private (`Cache-Control: no-store`), contains no identifiers or persistence version:
+
+```json
+{
+  "currentStreak": 3,
+  "longestStreak": 7,
+  "lastQualifyingDate": "2026-10-14",
+  "serverDate": "2026-10-15"
+}
+```
+
+An empty state returns zero counts and a null last date. Today/yesterday retain the
+stored current count for display; an older last date displays zero. Reads never
+change stored count, longest, date or version. A future stored date also displays
+zero defensively. The next qualifying Visit after a missed day resets current to 1
+while preserving longest. There is no scheduler resetting customer history.
+
+Streak prize entitlement (including 10/20/30-day benefits), redemption, milestone
+awarding, admin correction and Issue #25 remain deferred.
+
+Verification uses real PostgreSQL for V11→V12 historical/empty backfill, repeat
+migration validation, state constraints, Hibernate mapping, atomic registration and
+confirmation failures, same-date races, cookie-session ownership/roles and safe
+responses. Unit and service tests cover gaps, longest retention, pure stale reads,
+out-of-order rejection, London midnight and both DST transitions.
+
+```sh
+./mvnw -B -ntp -Dtest=StreakModelTests,StreakVisitTests,StreakApiTests,VisitConcurrencyTests,VisitServiceTests,MigrationTests test
+./mvnw -B -ntp clean verify
+```
 
 ## References
 
