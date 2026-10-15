@@ -10,6 +10,7 @@ import com.amiraharcs.loyalty.common.api.ConflictException;
 import com.amiraharcs.loyalty.customer.model.CustomerProfile;
 import com.amiraharcs.loyalty.customer.repository.CustomerProfileRepository;
 import com.amiraharcs.loyalty.loyalty.service.LoyaltyAccountService;
+import com.amiraharcs.loyalty.loyalty.service.StreakService;
 import jakarta.persistence.EntityManager;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotNull;
@@ -33,14 +34,16 @@ public class RegistrationService {
     private final Clock clock;
     private final EntityManager entities;
     private final TransactionTemplate transactions;
+    private final StreakService streaks;
 
     public RegistrationService(UserRepository users, RoleRepository roles, CustomerProfileRepository profiles,
             PasswordEncoder encoder, Clock clock, EntityManager entities, PlatformTransactionManager manager,
-            LoyaltyAccountService loyaltyAccounts) {
+            LoyaltyAccountService loyaltyAccounts, StreakService streaks) {
         this.users = users;
         this.roles = roles;
         this.profiles = profiles;
         this.loyaltyAccounts = loyaltyAccounts;
+        this.streaks = streaks;
         this.encoder = encoder;
         this.clock = clock;
         this.entities = entities;
@@ -59,6 +62,7 @@ public class RegistrationService {
                 // Privacy-first default: no email-derived alias or public name until explicitly chosen later.
                 var profile = profiles.save(new CustomerProfile(user, request.displayName(), "Member", true));
                 loyaltyAccounts.createForRegistration(profile, clock.instant());
+                streaks.createForRegistration(profile.getId());
                 entities.flush(); // Surface constraints inside the atomic persistence boundary.
             });
         } catch (RuntimeException exception) {

@@ -7,6 +7,7 @@ import com.amiraharcs.loyalty.auth.service.AuthenticationIdentityService;
 import com.amiraharcs.loyalty.common.api.ResourceNotFoundException;
 import com.amiraharcs.loyalty.customer.repository.CustomerProfileRepository;
 import com.amiraharcs.loyalty.loyalty.service.LoyaltyAccountService;
+import com.amiraharcs.loyalty.loyalty.service.StreakService;
 import com.amiraharcs.loyalty.store.model.Store;
 import com.amiraharcs.loyalty.store.service.StaffStoreScopeService;
 import com.amiraharcs.loyalty.visit.model.Visit;
@@ -38,10 +39,11 @@ public class VisitService {
     private final EntityManager entities;
     private final Clock clock;
     private final VisitAwardRule awards;
+    private final StreakService streaks;
     public VisitService(VisitRepository visits, CustomerProfileRepository profiles, LoyaltyAccountService accounts,
-            StaffStoreScopeService scope, AuthenticationIdentityService identities, EntityManager entities, Clock clock, VisitAwardRule awards) {
+            StaffStoreScopeService scope, AuthenticationIdentityService identities, EntityManager entities, Clock clock, VisitAwardRule awards, StreakService streaks) {
         this.visits = visits; this.profiles = profiles; this.accounts = accounts;
-        this.scope = scope; this.identities = identities; this.entities = entities; this.clock = clock; this.awards = awards;
+        this.scope = scope; this.identities = identities; this.entities = entities; this.clock = clock; this.awards = awards; this.streaks = streaks;
     }
 
     /**
@@ -73,6 +75,7 @@ public class VisitService {
             var visit = visits.append(new Visit(customer, account,
                     entities.getReference(Store.class, storeId), entities.getReference(User.class, staffId), confirmedAt, award));
             long balance = accounts.recordVisitEarn(visit);
+            streaks.recordVisit(visit);
             return new VisitConfirmationResult(visit.getId(), visit.getConfirmedAt(), visit.getBusinessDate(), visit.getEarnedPoints(), balance);
         } catch (RuntimeException exception) {
             // Only the named daily-qualification uniqueness conflict becomes the stable domain outcome.
