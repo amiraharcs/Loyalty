@@ -1433,6 +1433,80 @@ out-of-order rejection, London midnight and both DST transitions.
 ./mvnw -B -ntp clean verify
 ```
 
+## Reward catalogue (Issue #25)
+
+Reward is mutable catalogue data, not a redemption or an entitlement. V13 creates
+`loyalty.rewards`: UUID identity, bounded name (200) and description (2000), exact
+BIGINT point cost, active flag, nullable availability bounds, created/updated UTC
+timestamps, and an optimistic version. The architecture explicitly permits
+nonnegative costs: **0 through 9,007,199,254,740,991** are supported; floating-point
+and quoted numeric JSON values are rejected. Zero cost grants no benefit by itself.
+Name is required and stripped; description is required but may be empty. Null
+characters are rejected before PostgreSQL. Normal operations deactivate retained
+catalogue rows; there is no repository delete operation or HTTP DELETE endpoint.
+Future redemptions must use restrictive reward references and snapshot benefit/cost
+at creation so catalogue edits never rewrite their history.
+
+V13 seeds exactly the documented production default: **Free coffee, 3,000 points**
+(`e83bb76e-b4bf-470b-a3cc-5fc67495f162`), active with no availability bounds. It does
+not seed demo rewards, points, prizes or redemptions. The migration owns this initial
+configuration; subsequent Flyway startup does not overwrite ADMIN changes.
+
+Availability is `active && (from == null || now >= from) && (until == null || now < until)`.
+The start is inclusive, the end exclusive; null is unbounded. When both bounds are
+provided the end must be strictly later. Bounds are UTC instants (years 0001–9999),
+with at most PostgreSQL microsecond precision. Server Clock determines availability;
+client date/time, timezone and filters cannot change it. Active and window state are
+independent. Expired and scheduled definitions remain visible to ADMIN management.
+
+| Method and path | Permission / result |
+| --- | --- |
+| `GET /api/v1/rewards` | Explicit CUSTOMER **or STAFF**; only active, currently available rewards. ADMIN alone does not inherit this permission. |
+| `GET /api/v1/admin/rewards` | ADMIN; all definitions including inactive, scheduled and expired ones. |
+| `GET /api/v1/admin/rewards/{id}` | ADMIN lookup of a retained definition, or 404. |
+| `POST /api/v1/admin/rewards` | ADMIN + CSRF; create, 201 with a retrievable relative Location. |
+| `PATCH /api/v1/admin/rewards/{id}` | ADMIN + CSRF; allowlisted partial update, 200. |
+
+List responses follow the architecture's cursor contract: `items`, `nextCursor`
+(null at end), `hasNext`. Only `size` (default 20, range 1–100) and `cursor` are
+accepted. Order is **pointCost ASC, name ASC, id ASC**, using database string/UUID
+ordering. The bounded opaque cursor contains that tuple and listing scope; it can
+never switch an ordinary reader into admin scope. Availability is recalculated on
+every page, so paging a changing catalogue is not a snapshot. All responses use
+`Cache-Control: no-store`; no shared/public caching policy is introduced.
+
+The reader DTO contains only `id`, `name`, `description`, `pointCost`, `availableFrom`
+and `availableUntil`. Admin DTOs additionally expose active and created/updated times,
+never persistence version or audit metadata. Creation requires name, description,
+pointCost and active; availability fields are optional. PATCH accepts only these six
+editable fields. Omitted properties are preserved; explicit null clears either
+availability bound, while null name/description/cost/active is invalid. Empty patches,
+unknown fields and invalid resulting windows return 400. The merged full state is
+validated before mutation. Example:
+
+```json
+{"active": false, "availableUntil": null}
+```
+
+Security checks both route permissions and fresh active-account/role grants in
+RewardService. Every privileged mutation appends `REWARD_CREATED`, `REWARD_UPDATED`
+or (active→inactive) `REWARD_DEACTIVATED` in the **same transaction** as the definition
+change. Metadata contains only allowlisted changed field names, never request text.
+An audit failure rolls the reward change back; rejected operations leave no success
+audit. Optimistic version checks reject overlapping saves with `409 CONFLICT`.
+This protects concurrent transactions; stale sequential browser edits are not an
+ETag/If-Match workflow in this phase. Refresh before editing and after any conflict.
+Catalogue mutations do not require Idempotency-Key under the architecture contract;
+do not automatically retry POST creation after an ambiguous network failure.
+
+Redemption, point debits/refunds, fulfilment, prize entitlement and Issue #26 remain
+explicitly deferred. Catalogue operations never mutate the point ledger or streaks.
+
+```sh
+./mvnw -B -ntp -Dtest=RewardModelTests,RewardCatalogueTests,RewardAdminTests,RewardConcurrencyTests,MigrationTests test
+./mvnw -B -ntp clean verify
+```
+
 ## References
 
 - [Spring Security authentication persistence](https://docs.spring.io/spring-security/reference/servlet/authentication/persistence.html)
