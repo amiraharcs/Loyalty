@@ -1,5 +1,5 @@
 /**
  * Reward catalogue and transactional redemption workflows.
- * <p>Reserved package boundary; business types are added in later issues.</p>
+ * <p>Catalogue management is implemented; redemption workflows remain deferred.</p>
  */
 package com.amiraharcs.loyalty.reward;
