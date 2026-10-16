@@ -276,7 +276,7 @@ class AuthenticatedSessionTests {
         String id = browser.sessionId();
         browser.send(delete("/api/v1/auth/sessions/current"), 403);
         assertThat(sessionRows(id)).isEqualTo(1);
-        browser.send(get("/api/v1/rewards"), 403);
+        browser.send(get("/api/v1/not-implemented"), 403);
         browser.send(get("/actuator/env"), 403);
     }
 

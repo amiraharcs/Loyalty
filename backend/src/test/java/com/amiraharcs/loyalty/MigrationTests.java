@@ -36,7 +36,7 @@ class MigrationTests {
     void migratesEmptyDatabaseWithOnlyImplementedDomainAndSessionTablesAndCanRunAgain() throws Exception {
         withEmptyDatabase(url -> {
             var flyway = flyway(url);
-            assertThat(flyway.migrate().migrationsExecuted).isEqualTo(12);
+            assertThat(flyway.migrate().migrationsExecuted).isEqualTo(13);
             flyway.validate();
             assertThat(flyway.migrate().migrationsExecuted).isZero();
             try (var connection = DriverManager.getConnection(url,
@@ -46,7 +46,7 @@ class MigrationTests {
                          + "WHERE table_schema = 'loyalty' ORDER BY table_name")) {
                 var names = new java.util.ArrayList<String>();
                 while (tables.next()) { names.add(tables.getString(1)); }
-                assertThat(names).containsExactly("audit_logs", "customer_profiles", "flyway_schema_history", "idempotency_records", "loyalty_accounts", "point_transactions", "qr_identity_tokens", "qr_scan_events", "roles", "scan_resolutions", "spring_session", "spring_session_attributes", "staff_store", "stores", "streaks", "user_roles", "users", "visits");
+                assertThat(names).containsExactly("audit_logs", "customer_profiles", "flyway_schema_history", "idempotency_records", "loyalty_accounts", "point_transactions", "qr_identity_tokens", "qr_scan_events", "rewards", "roles", "scan_resolutions", "spring_session", "spring_session_attributes", "staff_store", "stores", "streaks", "user_roles", "users", "visits");
             }
             assertThatThrownBy(flyway::clean).isInstanceOf(FlywayException.class).hasMessageContaining("cleanDisabled");
         });
@@ -68,7 +68,7 @@ class MigrationTests {
                 insert.setObject(1, identity);
                 insert.executeUpdate();
             }
-            assertThat(flyway(url).migrate().migrationsExecuted).isEqualTo(9);
+            assertThat(flyway(url).migrate().migrationsExecuted).isEqualTo(10);
             try (var connection = DriverManager.getConnection(url,
                     PostgresTestDatabase.DATABASE.getUsername(), PostgresTestDatabase.DATABASE.getPassword());
                  var statement = connection.createStatement();
@@ -103,7 +103,7 @@ class MigrationTests {
                 }
             }
             var migrated = flyway(url);
-            assertThat(migrated.migrate().migrationsExecuted).isEqualTo(8);
+            assertThat(migrated.migrate().migrationsExecuted).isEqualTo(9);
             migrated.validate();
             assertThat(migrated.migrate().migrationsExecuted).isZero();
             try (var connection = DriverManager.getConnection(url,
@@ -174,7 +174,7 @@ class MigrationTests {
                         + UUID.randomUUID() + "','" + ids[2] + "',10,'ADJUSTMENT','" + ids[0] + "','Synthetic baseline',now())");
             }
             var upgraded = flyway(url);
-            assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(6); upgraded.validate();
+            assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(7); upgraded.validate();
             assertThat(upgraded.migrate().migrationsExecuted).isZero();
             try (var connection = DriverManager.getConnection(url, PostgresTestDatabase.DATABASE.getUsername(),
                     PostgresTestDatabase.DATABASE.getPassword()); var statement = connection.createStatement();
@@ -327,7 +327,7 @@ class MigrationTests {
                 }
                 connection.commit();
             }
-            var upgraded = flyway(url);
+            var upgraded = atVersion(url,"12");
             assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(1);
             upgraded.validate(); assertThat(upgraded.migrate().migrationsExecuted).isZero();
             try (var connection = DriverManager.getConnection(url, PostgresTestDatabase.DATABASE.getUsername(),
@@ -352,6 +352,47 @@ class MigrationTests {
                         "UPDATE loyalty.streaks SET current_count=1,longest_count=1,last_qualifying_date=NULL",
                         "UPDATE loyalty.streaks SET version=-1")) {
                     assertThatThrownBy(() -> statement.executeUpdate(mutation)).isInstanceOf(java.sql.SQLException.class);
+                }
+            }
+        });
+    }
+
+    @Test
+    void versionThirteenCreatesOneRealRewardAndEnforcesCatalogueConstraints() throws Exception {
+        withEmptyDatabase(url -> {
+            atVersion(url,"12").migrate();
+            var upgraded = flyway(url); assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(1);
+            upgraded.validate(); assertThat(upgraded.migrate().migrationsExecuted).isZero();
+            try (var connection = DriverManager.getConnection(url,PostgresTestDatabase.DATABASE.getUsername(),PostgresTestDatabase.DATABASE.getPassword());
+                    var statement = connection.createStatement()) {
+                try(var rows = statement.executeQuery("SELECT * FROM loyalty.rewards")) {
+                    assertThat(rows.next()).isTrue();
+                    assertThat(rows.getObject("id",UUID.class)).isEqualTo(UUID.fromString("e83bb76e-b4bf-470b-a3cc-5fc67495f162"));
+                    assertThat(rows.getString("name")).isEqualTo("Free coffee"); assertThat(rows.getLong("point_cost")).isEqualTo(3000);
+                    assertThat(rows.getBoolean("active")).isTrue(); assertThat(rows.getObject("available_from")).isNull();
+                    assertThat(rows.getObject("available_until")).isNull(); assertThat(rows.getObject("created_at")).isNotNull();
+                    assertThat(rows.next()).isFalse();
+                }
+                for(String mutation : java.util.List.of(
+                        "UPDATE loyalty.rewards SET name=' '",
+                        "UPDATE loyalty.rewards SET name=repeat('x',201)",
+                        "UPDATE loyalty.rewards SET description=repeat('x',2001)",
+                        "UPDATE loyalty.rewards SET point_cost=-1",
+                        "UPDATE loyalty.rewards SET point_cost=9007199254740992",
+                        "UPDATE loyalty.rewards SET active=NULL",
+                        "UPDATE loyalty.rewards SET available_from=now(),available_until=now()",
+                        "UPDATE loyalty.rewards SET available_from=now(),available_until=now()-interval '1 second'",
+                        "UPDATE loyalty.rewards SET available_from='infinity'",
+                        "UPDATE loyalty.rewards SET available_until='-infinity'",
+                        "UPDATE loyalty.rewards SET created_at=NULL",
+                        "UPDATE loyalty.rewards SET updated_at=created_at-interval '1 second'",
+                        "UPDATE loyalty.rewards SET version=-1")) {
+                    assertThatThrownBy(()->statement.executeUpdate(mutation)).isInstanceOf(java.sql.SQLException.class);
+                }
+                statement.executeUpdate("UPDATE loyalty.rewards SET point_cost=0");
+                statement.executeUpdate("UPDATE loyalty.rewards SET point_cost=9007199254740991,active=false");
+                try(var rows = statement.executeQuery("SELECT count(*) FROM loyalty.rewards")) {
+                    assertThat(rows.next()).isTrue(); assertThat(rows.getInt(1)).isEqualTo(1);
                 }
             }
         });
