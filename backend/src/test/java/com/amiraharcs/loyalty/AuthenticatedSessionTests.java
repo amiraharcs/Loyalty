@@ -214,6 +214,8 @@ class AuthenticatedSessionTests {
                 + "(SELECT id FROM loyalty.customer_profiles WHERE user_id = ?)", id);
         jdbc.update("DELETE FROM loyalty.loyalty_accounts WHERE customer_id IN "
                 + "(SELECT id FROM loyalty.customer_profiles WHERE user_id = ?)", id);
+        jdbc.update("DELETE FROM loyalty.game_life_state WHERE customer_id IN "
+                + "(SELECT id FROM loyalty.customer_profiles WHERE user_id = ?)", id);
         jdbc.update("DELETE FROM loyalty.customer_profiles WHERE user_id = ?", id);
         jdbc.update("DELETE FROM loyalty.user_roles WHERE user_id = ?", id);
         jdbc.update("INSERT INTO loyalty.user_roles (user_id, role_code) VALUES (?, 'STAFF')", id);

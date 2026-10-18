@@ -105,6 +105,7 @@ class RedemptionApiTests extends RedemptionTestSupport {
         jdbc.update("DELETE FROM loyalty.loyalty_accounts WHERE customer_id=?",owner);
         if(missing.equals("profile")) {
             jdbc.update("DELETE FROM loyalty.streaks WHERE customer_id=?",owner);
+            jdbc.update("DELETE FROM loyalty.game_life_state WHERE customer_id=?",owner);
             jdbc.update("DELETE FROM loyalty.customer_profiles WHERE id=?",owner);
         }
         redeem(setup,UUID.randomUUID(),404);
