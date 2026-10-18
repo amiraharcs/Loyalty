@@ -11,8 +11,8 @@ import org.springframework.data.repository.Repository;
 public interface GameLifeStateRepository extends Repository<GameLifeState, UUID> {
     Optional<GameLifeState> findById(UUID customerId);
 
-    // Force the version forward even though the aggregate has no mutable lives counter.
-    @Lock(LockModeType.PESSIMISTIC_FORCE_INCREMENT)
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select state from GameLifeState state where state.customerId = :customerId")
-    Optional<GameLifeState> lockForConsumption(UUID customerId);
+    Optional<GameLifeState> lockForUpdate(UUID customerId);
+
 }

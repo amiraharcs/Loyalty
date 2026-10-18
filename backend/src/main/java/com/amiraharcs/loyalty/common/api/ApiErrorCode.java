@@ -16,6 +16,7 @@ public enum ApiErrorCode {
     QR_REVOKED(HttpStatus.CONFLICT, "The QR identity token is no longer available.", "Unavailable QR"),
     SCAN_RESOLUTION_EXPIRED(HttpStatus.CONFLICT, "The scan resolution has expired.", "Expired scan resolution"),
     SCAN_RESOLUTION_CONSUMED(HttpStatus.CONFLICT, "The scan resolution has already been consumed.", "Consumed scan resolution"),
+    GAME_SESSION_ACTIVE(HttpStatus.CONFLICT, "A game session is already active.", "Game session active"),
     NO_GAME_LIVES(HttpStatus.CONFLICT, "No game lives are currently available.", "No game lives"),
     CONFLICT(HttpStatus.CONFLICT, "The request conflicts with the current resource state.", "Conflict"),
     UNAUTHENTICATED(HttpStatus.UNAUTHORIZED, "Authentication is required or credentials are invalid.", "Unauthenticated"),
