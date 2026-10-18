@@ -58,6 +58,17 @@ class LoyaltyLedgerTests {
             var visit = visits.append(new Visit(account.getCustomer(), account, store, user(), at, amount));
             return ledger.append(PointTransaction.forVisit(visit));
         }
+        if (type == PointTransactionType.REDEMPTION) {
+            var store = stores.save(new Store("Synthetic redemption store", "Synthetic address", StoreStatus.ACTIVE, at));
+            var reward = new com.amiraharcs.loyalty.reward.model.Reward("Synthetic benefit","",-amount,true,null,null,at);
+            entities.persist(reward); entities.flush();
+            var redemption = new com.amiraharcs.loyalty.reward.model.RewardRedemption(account.getCustomer(),account,reward,store,at);
+            entities.persist(redemption); entities.flush();
+            return ledger.append(PointTransaction.forRedemption(redemption));
+        }
+        if (type == PointTransactionType.ADJUSTMENT) {
+            return ledger.append(new PointTransaction(account,amount,type,user(),"Synthetic bounds fixture",at));
+        }
         return ledger.append(new PointTransaction(account, amount, type, null, null, at));
     }
     private void integrity(String sql, Object... args) {
@@ -187,14 +198,15 @@ class LoyaltyLedgerTests {
     @Test
     void persistsMinimumSafeIntegerExactlyWithoutIntroducingAWorkflow() {
         var account = account();
-        append(account, -PointValues.MAX_SAFE_INTEGER, PointTransactionType.REDEMPTION, NOW);
+        append(account, -PointValues.MAX_SAFE_INTEGER, PointTransactionType.ADJUSTMENT, NOW);
         assertThat(service.currentBalance(account.getCustomer().getId())).isEqualTo(-PointValues.MAX_SAFE_INTEGER);
     }
 
     @Test
     void aggregateUnderflowIsRejectedBeforeCommit() {
-        var account = account(); append(account, -PointValues.MAX_SAFE_INTEGER, PointTransactionType.REDEMPTION, NOW);
-        integrity("INSERT INTO loyalty.point_transactions(id,account_id,signed_amount,type,created_at) VALUES (?,?, -1,'REDEMPTION',now())", UUID.randomUUID(), account.getId());
+        var account = account(); append(account, -PointValues.MAX_SAFE_INTEGER, PointTransactionType.ADJUSTMENT, NOW);
+        var actor = user(); entities.flush();
+        integrity("INSERT INTO loyalty.point_transactions(id,account_id,signed_amount,type,actor_id,reason,created_at) VALUES (?,?, -1,'ADJUSTMENT',?,'Bounds fixture',now())", UUID.randomUUID(), account.getId(),actor.getId());
     }
 
     @Test
