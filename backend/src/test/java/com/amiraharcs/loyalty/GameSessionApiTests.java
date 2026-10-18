@@ -77,10 +77,10 @@ class GameSessionApiTests extends GameSessionTestSupport {
         assertThat(jdbc.queryForObject("SELECT status FROM loyalty.game_sessions WHERE id=?",String.class,session.sessionId())).isEqualTo("ACTIVE");
         noStart(foreign);
     }
-    @Test void liveSessionConflictDoesNotConsumeASecondLifeAndNoCompletionOrScoreRoutesExist() throws Exception {
+    @Test void liveSessionConflictDoesNotConsumeASecondLifeAndNoCompletionRoutesExist() throws Exception {
         var browser=login(RoleCode.CUSTOMER);var created=start(browser);
         assertThat(code(startHttp(browser,UUID.randomUUID(),null,409))).isEqualTo("GAME_SESSION_ACTIVE");
-        for(String suffix:new String[]{"completions","scores","cancellations"}) {
+        for(String suffix:new String[]{"completions","cancellations"}) {
             browser.send(post(SESSIONS+"/"+created.sessionId()+"/"+suffix).header("X-CSRF-TOKEN",browser.csrf),404);
         }
         assertThat(sessionRows(customer(browser))).isEqualTo(1);assertThat(consumed(customer(browser))).isEqualTo(1);

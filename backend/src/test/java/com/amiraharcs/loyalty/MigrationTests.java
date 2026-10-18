@@ -36,7 +36,7 @@ class MigrationTests {
     void migratesEmptyDatabaseWithOnlyImplementedDomainAndSessionTablesAndCanRunAgain() throws Exception {
         withEmptyDatabase(url -> {
             var flyway = flyway(url);
-            assertThat(flyway.migrate().migrationsExecuted).isEqualTo(17);
+            assertThat(flyway.migrate().migrationsExecuted).isEqualTo(18);
             flyway.validate();
             assertThat(flyway.migrate().migrationsExecuted).isZero();
             try (var connection = DriverManager.getConnection(url,
@@ -46,7 +46,7 @@ class MigrationTests {
                          + "WHERE table_schema = 'loyalty' ORDER BY table_name")) {
                 var names = new java.util.ArrayList<String>();
                 while (tables.next()) { names.add(tables.getString(1)); }
-                assertThat(names).containsExactly("audit_logs", "customer_profiles", "flyway_schema_history", "game_life_consumptions", "game_life_state", "game_sessions", "idempotency_records", "loyalty_accounts", "point_transactions", "qr_identity_tokens", "qr_scan_events", "reward_redemptions", "rewards", "roles", "scan_resolutions", "spring_session", "spring_session_attributes", "staff_store", "stores", "streaks", "user_roles", "users", "visits");
+                assertThat(names).containsExactly("audit_logs", "customer_profiles", "flyway_schema_history", "game_life_consumptions", "game_life_state", "game_scores", "game_sessions", "game_submission_events", "idempotency_records", "loyalty_accounts", "point_transactions", "qr_identity_tokens", "qr_scan_events", "reward_redemptions", "rewards", "roles", "scan_resolutions", "spring_session", "spring_session_attributes", "staff_store", "stores", "streaks", "user_roles", "users", "visits");
             }
             assertThatThrownBy(flyway::clean).isInstanceOf(FlywayException.class).hasMessageContaining("cleanDisabled");
         });
@@ -68,7 +68,7 @@ class MigrationTests {
                 insert.setObject(1, identity);
                 insert.executeUpdate();
             }
-            assertThat(flyway(url).migrate().migrationsExecuted).isEqualTo(14);
+            assertThat(flyway(url).migrate().migrationsExecuted).isEqualTo(15);
             try (var connection = DriverManager.getConnection(url,
                     PostgresTestDatabase.DATABASE.getUsername(), PostgresTestDatabase.DATABASE.getPassword());
                  var statement = connection.createStatement();
@@ -103,7 +103,7 @@ class MigrationTests {
                 }
             }
             var migrated = flyway(url);
-            assertThat(migrated.migrate().migrationsExecuted).isEqualTo(13);
+            assertThat(migrated.migrate().migrationsExecuted).isEqualTo(14);
             migrated.validate();
             assertThat(migrated.migrate().migrationsExecuted).isZero();
             try (var connection = DriverManager.getConnection(url,
@@ -174,7 +174,7 @@ class MigrationTests {
                         + UUID.randomUUID() + "','" + ids[2] + "',10,'ADJUSTMENT','" + ids[0] + "','Synthetic baseline',now())");
             }
             var upgraded = flyway(url);
-            assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(11); upgraded.validate();
+            assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(12); upgraded.validate();
             assertThat(upgraded.migrate().migrationsExecuted).isZero();
             try (var connection = DriverManager.getConnection(url, PostgresTestDatabase.DATABASE.getUsername(),
                     PostgresTestDatabase.DATABASE.getPassword()); var statement = connection.createStatement();
@@ -481,7 +481,7 @@ class MigrationTests {
             try(var connection=DriverManager.getConnection(url,PostgresTestDatabase.DATABASE.getUsername(),PostgresTestDatabase.DATABASE.getPassword());var statement=connection.createStatement()) {
                 statement.executeUpdate("INSERT INTO loyalty.game_life_consumptions(id,customer_id,consumed_at,recharge_at) VALUES ('"+consumption+"','"+ids[1]+"','2026-10-18T09:00:00Z','2026-10-18T11:00:00Z')");
             }
-            var latest=flyway(url);assertThat(latest.migrate().migrationsExecuted).isEqualTo(1);latest.validate();
+            var latest=atVersion(url,"17");assertThat(latest.migrate().migrationsExecuted).isEqualTo(1);latest.validate();
             assertThat(latest.migrate().migrationsExecuted).isZero();
             try(var connection=DriverManager.getConnection(url,PostgresTestDatabase.DATABASE.getUsername(),PostgresTestDatabase.DATABASE.getPassword());var statement=connection.createStatement()) {
                 try(var rows=statement.executeQuery("SELECT id,customer_id,consumed_at,recharge_at,session_id FROM loyalty.game_life_consumptions")) {
@@ -492,6 +492,32 @@ class MigrationTests {
                 }
                 try(var rows=statement.executeQuery("SELECT count(*) FROM loyalty.game_sessions")) {assertThat(rows.next()).isTrue();assertThat(rows.getLong(1)).isZero();}
                 assertThatThrownBy(()->statement.executeUpdate("INSERT INTO loyalty.game_life_consumptions(id,customer_id,consumed_at,recharge_at) VALUES ('"+UUID.randomUUID()+"','"+ids[1]+"',now(),now()+interval '2 hours')")).isInstanceOf(java.sql.SQLException.class);
+            }
+        });
+    }
+
+    @ParameterizedTest @ValueSource(booleans={false,true})
+    void versionEighteenPreservesValidLegacyGamesAndRefusesInventedCompletedScores(boolean completed) throws Exception {
+        withEmptyDatabase(url->{
+            atVersion(url,"17").migrate();var ids=seedLegacyIdentity(url);var session=UUID.randomUUID();var consumption=UUID.randomUUID();
+            try(var connection=DriverManager.getConnection(url,PostgresTestDatabase.DATABASE.getUsername(),PostgresTestDatabase.DATABASE.getPassword());var statement=connection.createStatement()) {
+                connection.setAutoCommit(false);
+                statement.executeUpdate("INSERT INTO loyalty.game_life_state(customer_id) VALUES ('"+ids[1]+"')");
+                statement.executeUpdate("INSERT INTO loyalty.game_sessions(id,customer_id,started_at,expires_at,status,engine_version) VALUES ('"+session+"','"+ids[1]+"','2026-10-18T10:00:00Z','2026-10-18T10:15:00Z','ACTIVE','v1')");
+                statement.executeUpdate("INSERT INTO loyalty.game_life_consumptions(id,customer_id,consumed_at,recharge_at,session_id) VALUES ('"+consumption+"','"+ids[1]+"','2026-10-18T10:00:00Z','2026-10-18T12:00:00Z','"+session+"')");
+                if(completed) {statement.executeUpdate("UPDATE loyalty.game_sessions SET status='COMPLETED',completed_at='2026-10-18T10:00:10Z' WHERE id='"+session+"'");}
+                connection.commit();
+            }
+            var latest=flyway(url);
+            if(completed) {
+                assertThatThrownBy(latest::migrate).isInstanceOf(FlywayException.class).hasMessageContaining("V18 requires no legacy unscored COMPLETED sessions");
+                assertThat(latest.info().current().getVersion().toString()).isEqualTo("17");
+            } else {
+                assertThat(latest.migrate().migrationsExecuted).isEqualTo(1);latest.validate();assertThat(latest.migrate().migrationsExecuted).isZero();
+                try(var connection=DriverManager.getConnection(url,PostgresTestDatabase.DATABASE.getUsername(),PostgresTestDatabase.DATABASE.getPassword());var statement=connection.createStatement();
+                    var rows=statement.executeQuery("SELECT (SELECT count(*) FROM loyalty.game_scores) AS scores,(SELECT count(*) FROM loyalty.game_submission_events) AS events,(SELECT count(*) FROM loyalty.game_life_consumptions WHERE id='"+consumption+"') AS lives")) {
+                    assertThat(rows.next()).isTrue();assertThat(rows.getLong("scores")).isZero();assertThat(rows.getLong("events")).isZero();assertThat(rows.getLong("lives")).isEqualTo(1);
+                }
             }
         });
     }

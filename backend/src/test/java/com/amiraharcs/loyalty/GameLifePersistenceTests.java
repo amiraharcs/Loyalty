@@ -37,6 +37,6 @@ class GameLifePersistenceTests extends GameLifeTestSupport {
         assertThatThrownBy(()->jdbc.execute("TRUNCATE loyalty.game_life_consumptions")).isInstanceOf(DataAccessException.class);
         assertThat(consumed(owner)).isEqualTo(1);
         assertThat(jdbc.queryForList("SELECT column_name FROM information_schema.columns WHERE table_schema='loyalty' AND table_name='game_life_state' ORDER BY ordinal_position",String.class)).containsExactly("customer_id","version");
-        assertThat(jdbc.queryForObject("SELECT count(*) FROM information_schema.tables WHERE table_schema='loyalty' AND table_name='game_scores'",Long.class)).isZero();
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM information_schema.tables WHERE table_schema='loyalty' AND table_name='weekly_periods'",Long.class)).isZero();
     }
 }
