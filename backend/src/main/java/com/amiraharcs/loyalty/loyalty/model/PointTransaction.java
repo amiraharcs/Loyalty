@@ -2,6 +2,7 @@ package com.amiraharcs.loyalty.loyalty.model;
 
 import com.amiraharcs.loyalty.auth.model.User;
 import com.amiraharcs.loyalty.visit.model.Visit;
+import com.amiraharcs.loyalty.reward.model.RewardRedemption;
 import jakarta.persistence.*;
 import java.time.Instant;
 import java.util.Objects;
@@ -34,14 +35,18 @@ public class PointTransaction {
     @JoinColumn(name = "visit_id", updatable = false)
     private Visit visit;
 
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "redemption_id", updatable = false)
+    private RewardRedemption redemption;
+
     protected PointTransaction() { }
     public PointTransaction(LoyaltyAccount account, long signedAmount, PointTransactionType type,
             User actor, String reason, Instant createdAt) {
-        this(account, signedAmount, type, actor, reason, createdAt, null);
+        this(account, signedAmount, type, actor, reason, createdAt, null, null);
     }
 
     private PointTransaction(LoyaltyAccount account, long signedAmount, PointTransactionType type,
-            User actor, String reason, Instant createdAt, Visit visit) {
+            User actor, String reason, Instant createdAt, Visit visit, RewardRedemption redemption) {
         this.account = Objects.requireNonNull(account);
         this.signedAmount = PointValues.amount(signedAmount);
         this.type = Objects.requireNonNull(type);
@@ -59,6 +64,11 @@ public class PointTransaction {
             throw new IllegalArgumentException("EARN requires its visit and confirming actor");
         }
         this.visit = visit;
+        if (type == PointTransactionType.REDEMPTION && (redemption == null || actor == null)
+                || type != PointTransactionType.REDEMPTION && redemption != null) {
+            throw new IllegalArgumentException("REDEMPTION requires its source and customer actor");
+        }
+        this.redemption = redemption;
         this.actor = actor;
         this.reason = reason;
     }
@@ -67,8 +77,16 @@ public class PointTransaction {
         Objects.requireNonNull(visit);
         if (visit.getId() == null) { throw new IllegalArgumentException("Visit must be persisted before earning points"); }
         return new PointTransaction(visit.getAccount(), visit.getEarnedPoints(), PointTransactionType.EARN,
-                visit.getConfirmedBy(), null, visit.getConfirmedAt(), visit);
+                visit.getConfirmedBy(), null, visit.getConfirmedAt(), visit, null);
     }
+    /** Every deduction field comes from the persisted request snapshot, never the current catalogue. */
+    public static PointTransaction forRedemption(RewardRedemption redemption) {
+        Objects.requireNonNull(redemption);
+        if (redemption.getId() == null) { throw new IllegalArgumentException("Redemption must be persisted before its debit"); }
+        return new PointTransaction(redemption.getAccount(), -redemption.getPointCostSnapshot(), PointTransactionType.REDEMPTION,
+                redemption.getCustomer().getUser(), null, redemption.getRequestedAt(), null, redemption);
+    }
+    public RewardRedemption getRedemption() { return redemption; }
     public Visit getVisit() { return visit; }
     public UUID getId() { return id; }
     public LoyaltyAccount getAccount() { return account; }

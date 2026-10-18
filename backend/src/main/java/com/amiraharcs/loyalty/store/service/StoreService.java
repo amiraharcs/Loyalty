@@ -8,7 +8,7 @@ import java.util.List;
 import java.util.UUID;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.annotation.*;
 
 @Service
 @Transactional(readOnly = true)
@@ -23,5 +23,11 @@ public class StoreService {
     }
     public List<StoreSummary> activeStores() {
         return stores.findAllByStatusOrderByNameAscIdAsc(StoreStatus.ACTIVE).stream().map(StoreSummary::from).toList();
+    }
+    /** Account lock precedes this shared configuration lock, retained through redemption commit. */
+    @PreAuthorize(RoleAuthorities.REQUIRES_CUSTOMER)
+    @Transactional(propagation = Propagation.MANDATORY)
+    public StoreSummary requireActiveForRedemption(UUID id) {
+        return stores.lockByIdAndStatus(id,StoreStatus.ACTIVE).map(StoreSummary::from).orElseThrow(ResourceNotFoundException::new);
     }
 }

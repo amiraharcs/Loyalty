@@ -4,6 +4,7 @@ import com.amiraharcs.loyalty.common.api.ResourceNotFoundException;
 import com.amiraharcs.loyalty.common.api.ConflictException;
 import com.amiraharcs.loyalty.loyalty.model.PointTransaction;
 import com.amiraharcs.loyalty.visit.model.Visit;
+import com.amiraharcs.loyalty.reward.model.RewardRedemption;
 import com.amiraharcs.loyalty.auth.security.RoleAuthorities;
 import org.hibernate.exception.ConstraintViolationException;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -67,6 +68,14 @@ public class LoyaltyAccountService {
             throw exception;
         }
         return currentBalance(visit.getCustomer().getId());
+    }
+
+    /** The customer workflow owns the account lock, redemption, audit and retry transaction. */
+    @PreAuthorize(RoleAuthorities.REQUIRES_CUSTOMER)
+    @Transactional(propagation = Propagation.MANDATORY)
+    public long recordRedemptionDebit(RewardRedemption redemption) {
+        transactions.append(PointTransaction.forRedemption(redemption));
+        return currentBalance(redemption.getCustomer().getId());
     }
 
     /** Registration's existing transaction also owns identity, role and profile persistence. */

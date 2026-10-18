@@ -9,7 +9,7 @@ public enum ApiErrorCode {
     MALFORMED_REQUEST(HttpStatus.BAD_REQUEST, "The request body is missing or invalid.", "Malformed request"),
     RESOURCE_NOT_FOUND(HttpStatus.NOT_FOUND, "The requested resource was not found.", "Resource not found"),
     VISIT_ALREADY_RECORDED(HttpStatus.CONFLICT, "A visit has already been recorded for this business date.", "Visit already recorded"),
-    INSUFFICIENT_POINTS(HttpStatus.CONFLICT, "The adjustment would reduce the balance below zero.", "Insufficient points"),
+    INSUFFICIENT_POINTS(HttpStatus.CONFLICT, "The operation would reduce the points balance below zero.", "Insufficient points"),
     IDEMPOTENCY_KEY_REUSED(HttpStatus.CONFLICT, "The idempotency key was already used for a different request.", "Idempotency key reused"),
     QR_INVALID(HttpStatus.CONFLICT, "The QR identity token is invalid.", "Invalid QR"),
     QR_EXPIRED(HttpStatus.CONFLICT, "The QR identity token has expired.", "Expired QR"),
