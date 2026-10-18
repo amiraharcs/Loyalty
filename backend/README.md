@@ -1530,8 +1530,8 @@ A small `GET /api/v1/customers/me/redemptions/{id}` supports owned resource reco
 and makes Location retrievable. It returns safe stored benefit/cost/source/status
 and time snapshots; it exposes no customer/account IDs, version, session or audit
 internals. Missing and another customer's IDs both return 404. It does not present
-the creation balance as a live balance. Collection history/pagination is deferred;
-no fulfilment, cancellation, expiry processing or refund route is added.
+the creation balance as a live balance. Issue #26 originally deferred collection history/fulfilment; Issue #27 below adds
+those operations. Cancellation, expiry processing and refunds remain deferred.
 
 V14 creates `loyalty.reward_redemptions`: UUID identity, customer/account/store/reward
 references, source POINTS, name/description/cost snapshots, PENDING status, requested
@@ -1544,8 +1544,7 @@ The request instant comes from the injected server Clock after acquiring all loc
 truncated to PostgreSQL microseconds. Expiry is **24 UTC hours (86,400 seconds)**
 after request time, including across London DST changes. This is a duration, unlike
 visit/streak business-date arithmetic. Expiry is retained evidence; reads do not
-change PENDING into EXPIRED. Issue #27/future lifecycle work must enforce the deadline
-before fulfilment. Inactive, future, expired and missing rewards, or inactive/missing
+change PENDING into EXPIRED. Issue #27 fulfilment below enforces this deadline; no expiry job is added. Inactive, future, expired and missing rewards, or inactive/missing
 stores, return safe 404 responses. Availability start is inclusive and end exclusive.
 
 Catalogue definitions permit zero cost, but this **POINTS** workflow requires a
@@ -1608,8 +1607,90 @@ availability and permission revocation are rechecked after real database blockin
 ./mvnw -B -ntp clean verify
 ```
 
-Staff fulfilment (Issue #27), cancellation, expiry jobs, refunds, prize redemption,
-streak prizes and frontend integration are explicitly not implemented here.
+Issue #26 scope excluded staff fulfilment, now described below. Cancellation, expiry
+jobs, refunds, prize redemption, streak prizes and frontend integration remain deferred.
+
+## Redemption history and staff fulfilment (Issue #27)
+
+`GET /api/v1/customers/me/redemptions` requires an active explicit CUSTOMER grant.
+Ownership is resolved from the session; customerId/status/time/sort filters are not
+accepted. The response contains `items`, `nextCursor` (null at end) and `hasNext`.
+Only size (default 20, range 1–100) and cursor are accepted. Keyset ordering is
+**requestedAt DESC, id DESC**, using PostgreSQL UUID byte order for timestamp ties.
+The bounded opaque cursor is bound to the server-resolved customer. Forging a
+position cannot expand query ownership. Each page re-reads current status; new rows
+may appear before the current position without repeating older rows.
+
+History and the preserved owned `GET /api/v1/customers/me/redemptions/{id}` return
+retained name/description/cost snapshots, IDs of the reward/store, source, status,
+requestedAt, expiresAt and nullable fulfilledAt. Existing `rewardName` and `pointCost`
+field names remain snapshot values. They never expose another customer's records,
+customer/account IDs, persistence version or staff/security internals. Catalogue edits
+and deactivation do not rewrite these values. All responses use no-store caching.
+
+`POST /api/v1/staff/redemptions/{id}/fulfilments` requires STAFF, CSRF and a UUID
+Idempotency-Key. Send no body (an empty JSON object is also supported). Unknown body
+fields and query parameters are rejected; callers cannot choose actor/store/status,
+price, balance, refund or timestamp. ADMIN alone has no staff permission; an explicit
+STAFF grant is required. The response is 200 with redemptionId, FULFILLED status,
+storeId and the original fulfilledAt; the internal fulfilledBy ID is not exposed.
+
+The service checks current active STAFF and customer grants, the redemption's active
+store and the staff member's active assignment to **that** store. Unassigned/out-of-
+scope/missing resources return the same safe 404. Staff cannot fulfil their own
+customer redemption, including combined CUSTOMER/STAFF/ADMIN accounts (403). Disabled
+accounts and removed grants cannot fulfil or replay stored results.
+
+Retry infrastructure takes its existing actor/operation/key advisory lock first.
+Business locks then follow **customer LoyaltyAccount → RewardRedemption**, with the
+initial nonlocking lookup returning only target IDs to avoid caching stale state.
+Permissions, assignment, active store/customer and self-service rules are checked
+again after waiting. A PENDING row can transition to FULFILLED only before its
+exclusive expiry (`serverNow < expiresAt`) and not before requestedAt. Time comes
+from the injected server Clock at microsecond precision, after the locks.
+
+Fulfilment changes only status, fulfilledBy (authenticated staff), fulfilledAt and
+optimistic version. It creates **no PointTransaction** and leaves account balance,
+original deduction, benefit/cost snapshots, owner/store and request/expiry times intact.
+The state change, `REDEMPTION_FULFILLED` audit and retry result commit together. Audit
+metadata contains only safe resource IDs, with server actor/time/request correlation;
+it stores no request bodies, emails or session data. Failures after audit/retry writes
+roll everything back to PENDING with null actor/time and no success audit/result.
+
+The operation key scope is `STAFF_REDEMPTION_FULFILMENT`. Same actor/key/redemption
+returns the original result; changing the path ID with a used key returns 409
+IDEMPOTENCY_KEY_REUSED. A new key or another currently assigned staff member repeating
+an already FULFILLED redemption gets its existing result without another transition
+or audit. Successful natural no-ops can retain their own retry result. Current scope
+is always rechecked, even after fulfilment/expiry or on an exact replay. Fulfilled
+actor/time never change. Concurrency serializes competing callers to one transition
+and one success audit, with the same result returned to valid subsequent callers.
+
+**Expiry/refund decision:** expired PENDING requests return 409 CONFLICT without
+changing state or issuing a refund. The status remains PENDING with a past expiresAt,
+and the original points deduction remains reserved. No automatic recovery/refund is
+provided by this issue; cancellation/refund/expiry processing require their later
+atomic lifecycle implementation. CANCELLED/EXPIRED states also return 409. Fulfilled
+rows remain fulfilled after expiry; already-completed retries do not re-apply the
+PENDING expiry check or charge points.
+
+V14 already supplies fields, fulfilment consistency/FKs and immutable source/deletion
+guards. `V15__support_redemption_fulfilment.sql` adds the missing database guard against
+reversing FULFILLED/CANCELLED/EXPIRED or changing terminal fulfilment actor/time. It
+changes no stored history and adds no business records. V1–V14 remain untouched.
+
+Tests cover owned/tied-timestamp cursor pages, source snapshots, permissions and body
+spoofing, exact expiry, staff self-service, roles/store/assignment/customer eligibility,
+real lock waits and revocation, exact/natural retries, same/different-key/staff races,
+audit/retry rollback, FK/evidence consistency and database terminal-state guards.
+
+```sh
+./mvnw -B -ntp -Dtest=RedemptionHistoryTests,FulfilmentApiTests,FulfilmentTransactionTests,FulfilmentIntegrityTests,FulfilmentLockingTests,MigrationTests test
+./mvnw -B -ntp clean verify
+```
+
+Customer cancellation, refund entries, background expiry, prize-backed redemptions,
+staff search dashboards, admin redemption editing and Issue #28 remain deferred.
 
 ## References
 
