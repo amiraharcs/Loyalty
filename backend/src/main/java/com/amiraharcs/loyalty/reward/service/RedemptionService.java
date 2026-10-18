@@ -88,6 +88,15 @@ public class RedemptionService {
         var customer = profile(currentCustomerId());
         return redemptions.findByIdAndCustomerId(id,customer.getId()).map(RedemptionDetails::from).orElseThrow(ResourceNotFoundException::new);
     }
+    public RedemptionHistoryPage history(int size,String cursor) {
+        var customer=profile(currentCustomerId());
+        if(size<1 || size>100) { throw new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.BAD_REQUEST); }
+        var after=RedemptionHistoryCursor.decode(cursor,customer.getId());
+        var rows=redemptions.history(customer.getId(),after.after(),after.time(),after.id(),org.springframework.data.domain.PageRequest.of(0,size+1));
+        boolean hasNext=rows.size()>size;var visible=rows.subList(0,Math.min(size,rows.size()));
+        return new RedemptionHistoryPage(visible.stream().map(RedemptionDetails::from).toList(),
+                hasNext?RedemptionHistoryCursor.encode(visible.getLast(),customer.getId()):null,hasNext);
+    }
     private CustomerProfile profile(UUID actor) { return profiles.findByUserId(actor).orElseThrow(ResourceNotFoundException::new); }
     private UUID currentCustomerId() {
         var authentication = SecurityContextHolder.getContext().getAuthentication();

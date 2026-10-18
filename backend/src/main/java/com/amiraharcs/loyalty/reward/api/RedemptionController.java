@@ -25,4 +25,10 @@ public class RedemptionController {
     public ResponseEntity<RedemptionDetails> details(@PathVariable UUID id) {
         return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(redemptions.details(id));
     }
+    @GetMapping
+    public ResponseEntity<RedemptionHistoryPage> history(@RequestParam(defaultValue="20") int size,
+            @RequestParam(required=false) String cursor,HttpServletRequest request) {
+        RewardController.validateQuery(request);
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(redemptions.history(size,cursor));
+    }
 }

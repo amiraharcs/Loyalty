@@ -48,6 +48,17 @@ public class RewardRedemption {
         this.expiresAt = requestedAt.plus(Duration.ofHours(24));
     }
     public UUID getId() { return id; }
+    /** One permitted operational transition; retries are resolved by the locked application service. */
+    public void fulfil(User staff,Instant at) {
+        Objects.requireNonNull(staff); Objects.requireNonNull(at);
+        at = at.truncatedTo(ChronoUnit.MICROS);
+        if (status != RedemptionStatus.PENDING) { throw new IllegalStateException("Only pending redemptions can be fulfilled"); }
+        if (staff.getId() == null || staff.getId().equals(customer.getUser().getId())
+                || at.isBefore(requestedAt) || !at.isBefore(expiresAt)) {
+            throw new IllegalArgumentException("Invalid redemption fulfilment actor or time");
+        }
+        this.status = RedemptionStatus.FULFILLED; this.fulfilledBy = staff; this.fulfilledAt = at;
+    }
     public CustomerProfile getCustomer() { return customer; }
     public LoyaltyAccount getAccount() { return account; }
     public Store getStore() { return store; }
