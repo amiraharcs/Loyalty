@@ -1786,8 +1786,8 @@ not business-date arithmetic, determines expiry across midnight/DST.
 `GameSession` has a generated UUID, customer owner, immutable startedAt/expiresAt/
 engineVersion, nullable completedAt, ACTIVE/COMPLETED/EXPIRED status and optimistic
 version. A session is live only while `serverNow < expiresAt`. Exact equality expires
-it. Completion fields/status are prepared for Issue #30, but no completion method,
-score model or completion/score endpoint is supplied now. Weekly-period linkage is
+it. Issue #30 below adds score acceptance and the centralized completion transition;
+there is no standalone completion endpoint. Weekly-period linkage is
 entirely deferred until the competition phase.
 
 A single start transaction performs:
@@ -1862,8 +1862,123 @@ exercise actual HTTP starts/recovery.
 ./mvnw -B -ntp clean verify
 ```
 
-Issue #30 remains deferred: GameScore, score submission/completion, plausibility checks,
-anti-cheat, leaderboard, weekly assignment, prizes and frontend game integration.
+Issue #30 score acceptance follows below. Leaderboards, weekly assignment, prizes,
+frontend integration and advanced anti-cheat remain deferred.
+
+## Accepted game scores and personal best (Issue #30)
+
+`POST /api/v1/customers/me/game-sessions/{id}/scores` requires an ACTIVE identity,
+an explicit CUSTOMER grant, CSRF and UUID Idempotency-Key. STAFF/ADMIN alone have no
+permission; combined roles require CUSTOMER. Send exactly `{"score":3600}`. Score is
+an unquoted integer in 0..9,007,199,254,740,991; fractional, negative, missing, null,
+unsafe and unknown fields return 400. Client owner, duration, timestamps, engine,
+status, ceiling, period and life overrides are rejected. All query parameters are
+rejected. The actual servlet remote address supplies the IP budget; forwarded headers
+cannot select it under the existing trusted-proxy policy.
+
+First acceptance returns **201** with relative Location at the owned
+`GET /api/v1/customers/me/game-sessions/{id}/scores`. The DTO has exactly scoreId,
+sessionId, score, acceptedAt and sessionStatus=COMPLETED, with no-store caching.
+GET of foreign/missing/unscored sessions returns the same safe 404. Responses contain
+no persistence version, owner ID, validation internals or client telemetry.
+
+The facade owns the transaction boundary. The existing actor/operation/key advisory
+lock comes first (`CUSTOMER_GAME_SCORE`, canonical payload includes session ID and
+score), then GameLifeState, then the owned GameSession write lock. Eligibility is
+rechecked after waits; server Clock is captured after locking, at microsecond precision.
+An owned ACTIVE run is eligible only before its exclusive expiry. Acceptance inserts
+one immutable GameScore and sets status COMPLETED/completedAt to the same server
+instant as acceptedAt. Success audit GAME_SCORE_ACCEPTED and retry result commit in
+that transaction. A failure, including audit/retry persistence failure, rolls score,
+completion, version and success evidence back; the key can retry. It creates no
+PointTransaction, reward, entitlement or life consumption and never refunds a life.
+
+The first accepted score permanently owns the session. Same actor/key/path/score
+replays the original HTTP status, body and Location. A changed score or path with that
+key gives `409 IDEMPOTENCY_KEY_REUSED`. With a fresh key, the identical accepted score
+returns **200** and the original score ID/acceptedAt/status; that natural retry's 200
+result is itself retained for exact replay. A different second score gives
+`409 SCORE_ALREADY_SUBMITTED`. Retries work after expiry without re-completing the
+session or changing timestamps, but still require current active CUSTOMER permissions.
+Concurrent identical scores produce one creation plus a natural/exact replay;
+concurrent different scores produce one creation and one conflict, never replacement.
+
+**v1 screening:** only the session's persisted engineVersion determines validation.
+For v1 use `elapsed = min(900, floor(serverNow - startedAt in seconds))`, then
+`ceiling = 350 * elapsed + 100`. A server clock preceding startedAt fails closed.
+At 0 seconds scores 0..100 are valid; at 10 seconds 3600 passes and 3601 gives
+`409 SCORE_IMPLAUSIBLE`. At 10.999 seconds the ceiling remains 3600. Just before
+15 minutes elapsed floors to 899 and the ceiling is 314750. At exactly 900 seconds
+the formula's theoretical ceiling is 315100, but the default session is already
+expired and cannot accept any score. Elapsed is capped at 900 even if a server operator
+configured a longer session lifetime. A shorter configured expiry still wins.
+Unknown engine versions give a safe 500 INTERNAL_ERROR, never a v1 fallback. This
+means configuring new starts with v2 requires implementing its validator before launch.
+The ceiling is a conservative screening rule; it **does not prove honest gameplay**
+or prevent bots. No telemetry, deterministic replay or advanced anti-cheat is added.
+
+At `serverNow >= expiresAt`, an ACTIVE session becomes EXPIRED with the existing
+expiry audit and the submission returns `409 SESSION_EXPIRED`; EXPIRED stays rejected.
+This expected rejection commits the lazy expiry before raising the HTTP conflict.
+Other rejected business operations roll back. Rejection/expiry never removes the
+original consumption or changes its independent two-hour recharge. An already accepted
+exact/natural retry is handled before expiry/plausibility checks.
+
+`GET /api/v1/customers/me/game-summary` is CUSTOMER-only and returns exactly
+`{"personalBest":3600}`, or null when no accepted score exists. It queries the highest
+accepted score through the current customer's COMPLETED sessions; a valid zero stays
+zero. No customer IDs/filters are accepted. Current-week best, periods, rank and public
+leaderboards are entirely deferred; no fake weekly property is returned.
+
+Ordinary gameplay rejections use a dedicated append-only `game_submission_events`
+table rather than privileged audit actions. After the business transaction releases
+all locks, an independent transaction records actor user ID, an owned session reference
+(or null for foreign/missing targets), safe validated integer score, stable reason code,
+server occurredAt and server requestId. It stores no arbitrary body, cookie, CSRF,
+IP address, credential or invented telemetry. Expected conflicts, missing resources,
+rate limits and internal/unknown-engine failures are retained. Authentication, role,
+CSRF and malformed-body failures rejected before the command retain the existing
+security/validation response handling; they do not create game events or charge this
+command's budget. If the independent event store itself is unavailable, preserve the
+original safe response and log only trusted actor/request IDs and the stable code,
+matching existing QR failure-event conventions.
+
+Default per-process sliding-window budgets are **60 attempts/customer/minute** and
+**240 attempts/IP/minute**, including successful and retried well-formed authenticated
+submissions. Configure GAME_SCORE_CUSTOMER_LIMIT / GAME_SCORE_IP_LIMIT (range 1–1000).
+Exceeded budgets return safe RFC 9457 `429 RATE_LIMITED` with Retry-After and no business
+mutation. They recover after the one-minute window; no permanent lockout is created.
+Counters are bounded, thread-safe and in memory using existing infrastructure. Multiple
+application instances require shared/gateway limiting before horizontal deployment;
+restart resets this temporary budget. Database/session locks remain the correctness
+boundary and do not depend on rate limiting.
+
+`V18__create_game_scores.sql` adds immutable GameScore (UUID, unique restrictive session
+FK, safe nonnegative BIGINT score and finite acceptedAt), a score index and rejection
+event persistence/indexes. Customer identity is derived through the session. Deferred
+constraint triggers enforce COMPLETED iff exactly one score exists with acceptedAt
+matching completedAt; ACTIVE/EXPIRED cannot retain scores. Deferred checks permit either
+flush order inside one transaction, avoiding an unsafe cross-table row CHECK. Existing
+session timestamp/terminal-state and life source guards remain intact. V1–V17 are
+unchanged. No scores or security events are seeded. V18 refuses unexpected legacy
+COMPLETED sessions from before any production completion writer, rather than inventing
+scores or silently accepting inconsistent history; investigate such dev/manual records
+and use an explicitly reviewed repair migration before deployment.
+
+Tests cover request integer/field validation, owned cookie/CSRF/role isolation, exact
+server-time ceilings and expiry, unknown engines, idempotent/natural/different-score
+retries, real concurrent same/different-score/key submissions, rollback after acceptance
+and retry writes, immutable FK/completion constraints, rejection events, recovery from
+customer/IP throttling, owned personal best and lock-wait expiry/permission checks.
+
+```sh
+./mvnw -B -ntp '-Dtest=GameScore*Tests,ScorePlausibilityTests,MigrationTests' test
+./mvnw -B -ntp clean verify
+```
+
+Issue #31 remains unstarted: WeeklyPeriod, weekly best/leaderboards, public rankings,
+settlement, CustomerPrize, game prizes and frontend integration. Scores never convert
+to loyalty points.
 
 ## References
 
