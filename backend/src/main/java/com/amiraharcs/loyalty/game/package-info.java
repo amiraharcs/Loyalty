@@ -1,5 +1,5 @@
 /**
- * Server-owned game sessions, lives and accepted scores.
- * <p>Reserved package boundary; business types are added in later issues.</p>
+ * Server-owned game lives derived from immutable consumption history.
+ * <p>Session creation and accepted scores are added in later issues.</p>
  */
 package com.amiraharcs.loyalty.game;

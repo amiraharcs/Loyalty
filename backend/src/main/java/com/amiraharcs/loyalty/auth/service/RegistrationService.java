@@ -11,6 +11,7 @@ import com.amiraharcs.loyalty.customer.model.CustomerProfile;
 import com.amiraharcs.loyalty.customer.repository.CustomerProfileRepository;
 import com.amiraharcs.loyalty.loyalty.service.LoyaltyAccountService;
 import com.amiraharcs.loyalty.loyalty.service.StreakService;
+import com.amiraharcs.loyalty.game.service.GameLifeService;
 import jakarta.persistence.EntityManager;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotNull;
@@ -35,15 +36,17 @@ public class RegistrationService {
     private final EntityManager entities;
     private final TransactionTemplate transactions;
     private final StreakService streaks;
+    private final GameLifeService gameLives;
 
     public RegistrationService(UserRepository users, RoleRepository roles, CustomerProfileRepository profiles,
             PasswordEncoder encoder, Clock clock, EntityManager entities, PlatformTransactionManager manager,
-            LoyaltyAccountService loyaltyAccounts, StreakService streaks) {
+            LoyaltyAccountService loyaltyAccounts, StreakService streaks, GameLifeService gameLives) {
         this.users = users;
         this.roles = roles;
         this.profiles = profiles;
         this.loyaltyAccounts = loyaltyAccounts;
         this.streaks = streaks;
+        this.gameLives = gameLives;
         this.encoder = encoder;
         this.clock = clock;
         this.entities = entities;
@@ -63,6 +66,7 @@ public class RegistrationService {
                 var profile = profiles.save(new CustomerProfile(user, request.displayName(), "Member", true));
                 loyaltyAccounts.createForRegistration(profile, clock.instant());
                 streaks.createForRegistration(profile.getId());
+                gameLives.createForRegistration(profile.getId());
                 entities.flush(); // Surface constraints inside the atomic persistence boundary.
             });
         } catch (RuntimeException exception) {

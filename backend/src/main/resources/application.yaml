@@ -94,6 +94,9 @@ management:
       enabled: true
 
 loyalty:
+  game-lives:
+    max-lives: ${GAME_MAX_LIVES:3}
+    recharge-interval: ${GAME_LIFE_RECHARGE_INTERVAL:PT2H}
   visits:
     points-per-visit: ${POINTS_PER_VISIT:100}
   qr:
