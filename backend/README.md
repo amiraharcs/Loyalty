@@ -1499,13 +1499,117 @@ ETag/If-Match workflow in this phase. Refresh before editing and after any confl
 Catalogue mutations do not require Idempotency-Key under the architecture contract;
 do not automatically retry POST creation after an ambiguous network failure.
 
-Redemption, point debits/refunds, fulfilment, prize entitlement and Issue #26 remain
-explicitly deferred. Catalogue operations never mutate the point ledger or streaks.
+Issue #25 covers catalogue management only; its operations never mutate the point
+ledger or streaks. Issue #26 POINTS redemption follows below. Fulfilment, refunds
+and prize entitlement remain deferred.
 
 ```sh
 ./mvnw -B -ntp -Dtest=RewardModelTests,RewardCatalogueTests,RewardAdminTests,RewardConcurrencyTests,MigrationTests test
 ./mvnw -B -ntp clean verify
 ```
+
+## Transactional points reward redemption (Issue #26)
+
+`POST /api/v1/customers/me/redemptions` requires an active, explicit CUSTOMER grant,
+a valid session, CSRF and a UUID `Idempotency-Key`. STAFF/ADMIN alone cannot redeem;
+combined-role accounts need an explicit CUSTOMER grant. Ownership and actor always
+come from the authenticated principal. The allowlisted body contains only:
+
+```json
+{"rewardId":"e83bb76e-b4bf-470b-a3cc-5fc67495f162","storeId":"<active-store-uuid>"}
+```
+
+The response is `201 Created`, `Cache-Control: no-store`, with a same-origin relative
+Location at `/api/v1/customers/me/redemptions/{redemptionId}`. Its DTO contains
+redemptionId, rewardId, rewardName, pointCost, PENDING status, storeId, requestedAt,
+expiresAt and newBalance. No balance setter, price/amount override, customer/actor,
+source, status or expiry input is accepted. No QR scan or physical-presence check
+is required for this customer operation.
+
+A small `GET /api/v1/customers/me/redemptions/{id}` supports owned resource recovery
+and makes Location retrievable. It returns safe stored benefit/cost/source/status
+and time snapshots; it exposes no customer/account IDs, version, session or audit
+internals. Missing and another customer's IDs both return 404. It does not present
+the creation balance as a live balance. Collection history/pagination is deferred;
+no fulfilment, cancellation, expiry processing or refund route is added.
+
+V14 creates `loyalty.reward_redemptions`: UUID identity, customer/account/store/reward
+references, source POINTS, name/description/cost snapshots, PENDING status, requested
+and expiry instants, optimistic version and nullable future fulfilment fields. Status
+vocabulary also reserves FULFILLED/CANCELLED/EXPIRED for later lifecycle work; there
+are no methods/endpoints implementing those transitions. CustomerPrize and PRIZE
+sources remain deferred until real entitlement references exist.
+
+The request instant comes from the injected server Clock after acquiring all locks,
+truncated to PostgreSQL microseconds. Expiry is **24 UTC hours (86,400 seconds)**
+after request time, including across London DST changes. This is a duration, unlike
+visit/streak business-date arithmetic. Expiry is retained evidence; reads do not
+change PENDING into EXPIRED. Issue #27/future lifecycle work must enforce the deadline
+before fulfilment. Inactive, future, expired and missing rewards, or inactive/missing
+stores, return safe 404 responses. Availability start is inclusive and end exclusive.
+
+Catalogue definitions permit zero cost, but this **POINTS** workflow requires a
+positive cost in `1..9,007,199,254,740,991`, because every successful request must have
+a matching negative ledger entry. A zero-cost definition returns 409 CONFLICT; it is
+not a free-entitlement or prize-redemption shortcut. The seeded 3,000-point coffee
+is redeemable when the customer has sufficient earned/adjusted points.
+
+One transaction performs these operations:
+
+1. Resolve current customer/profile and take the existing actor/operation/key retry
+   lock. Hash only canonical reward/store IDs; no credentials/session data is stored.
+2. Lock the customer's LoyaltyAccount and recheck active account/role grants after
+   waiting. The account lock remains first among business aggregates.
+3. On an exact committed retry, return the original 201 body/Location and creation
+   balance without another debit/audit, even if catalogue/store state later changed.
+   Removed permissions or inactive identity cannot retrieve the stored result.
+4. For a new operation, take shared reward then store configuration locks, recheck
+   active state/availability against server time, and calculate the exact ledger sum.
+   Shared locks keep catalogue/store edits from changing the accepted snapshot while
+   this transaction commits. Admin edits acquire no account lock in reverse order.
+5. Reject insufficient points with `409 INSUFFICIENT_POINTS`. Validate the resulting
+   nonnegative JavaScript-safe total, append the PENDING request, and append its
+   negative REDEMPTION transaction through LoyaltyAccountService.
+6. Append `REWARD_REDEEMED` audit and the retry result in that same transaction. Audit
+   metadata contains only safe customer/reward/store IDs and point cost. Return only
+   after commit. Any failure rolls request, deduction, account version, success audit
+   and retry result back; the key remains usable for a corrected retry.
+
+Keys are scoped to authenticated actor and `CUSTOMER_REWARD_REDEMPTION`. A changed
+payload with the same key returns `409 IDEMPOTENCY_KEY_REUSED`; different keys are
+separate redemptions only when points suffice. Existing retention is
+at least 24 hours; no key cleanup job is introduced here. The stored response's
+newBalance is the balance at original creation, not recalculated on replay.
+
+V14 adds `point_transactions.redemption_id`. Database constraints and triggers enforce
+one negative deduction per source, correct account/customer ownership, exact snapshot
+cost, customer actor and request timestamp. A deferred constraint requires the
+matching deduction before a POINTS redemption can commit; conversely a deduction
+requires its real request. The raw-SQL deduction guard also locks the account and
+rejects a negative resulting total. Existing safe-total/version and immutable ledger,
+EARN and ADJUSTMENT guards remain intact. Snapshots/identity/request/expiry cannot be
+rewritten; requests cannot be deleted/truncated and references are restrictive.
+Later catalogue edits/deactivation never change historical name/description/price.
+
+The migration seeds no redemptions or deductions. Before Issue #26 there was no
+production REDEMPTION writer. If a database nevertheless contains legacy unlinked
+REDEMPTION rows, V14 fails explicitly rather than inventing requests or editing
+immutable history; investigate and plan a reviewed data migration before deployment.
+V1–V13 remain unchanged. No fake future prize/fulfilment records are backfilled.
+
+Tests cover real PostgreSQL source pairing, ownership/FKs, immutability, safe amount
+bounds, exact availability/expiry, HTTP session/CSRF/role isolation, snapshot retention,
+exact retry and payload conflict, failures before/after deduction and audit/retry
+writes, and concurrent attempts on the same/different rewards. Lock-wait tests prove
+availability and permission revocation are rechecked after real database blocking.
+
+```sh
+./mvnw -B -ntp -Dtest=RedemptionApiTests,RedemptionIdempotencyTests,RedemptionRollbackTests,RedemptionConcurrencyTests,RedemptionPersistenceTests,RedemptionLockingTests,MigrationTests test
+./mvnw -B -ntp clean verify
+```
+
+Staff fulfilment (Issue #27), cancellation, expiry jobs, refunds, prize redemption,
+streak prizes and frontend integration are explicitly not implemented here.
 
 ## References
 
