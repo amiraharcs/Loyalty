@@ -94,6 +94,9 @@ management:
       enabled: true
 
 loyalty:
+  game-scores:
+    customer-limit: ${GAME_SCORE_CUSTOMER_LIMIT:60}
+    ip-limit: ${GAME_SCORE_IP_LIMIT:240}
   game-sessions:
     lifetime: ${GAME_SESSION_LIFETIME:PT15M}
     engine-version: ${GAME_ENGINE_VERSION:v1}

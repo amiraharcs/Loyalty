@@ -10,6 +10,7 @@ import org.springframework.data.repository.Repository;
 
 /** All mutation locks follow the customer's GameLifeState lock. No delete operation. */
 public interface GameSessionRepository extends Repository<GameSession, UUID> {
+    boolean existsByIdAndCustomerId(UUID id, UUID customerId);
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select s from GameSession s where s.customerId = :customerId and s.status = 'ACTIVE'")
     Optional<GameSession> lockActive(UUID customerId);

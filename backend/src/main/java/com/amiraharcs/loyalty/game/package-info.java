@@ -1,5 +1,5 @@
 /**
- * Server-owned sessions and independently recharging lives with atomic source evidence.
- * <p>Score submission, competition periods and leaderboards are added in later issues.</p>
+ * Server-owned runs, independently recharging lives and immutable accepted scores.
+ * <p>Competition periods, leaderboards and prizes are added in later issues.</p>
  */
 package com.amiraharcs.loyalty.game;

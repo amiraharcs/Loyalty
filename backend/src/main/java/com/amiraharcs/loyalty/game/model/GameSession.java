@@ -36,6 +36,12 @@ public class GameSession {
         status = GameSessionStatus.EXPIRED;
         return true;
     }
+    public void complete(Instant now) {
+        if(status!=GameSessionStatus.ACTIVE || now.isBefore(startedAt) || !now.isBefore(expiresAt)) {
+            throw new IllegalStateException("Session cannot be completed");
+        }
+        status=GameSessionStatus.COMPLETED;completedAt=now;
+    }
     public UUID getId() { return id; }
     public UUID getCustomerId() { return customerId; }
     public Instant getStartedAt() { return startedAt; }
