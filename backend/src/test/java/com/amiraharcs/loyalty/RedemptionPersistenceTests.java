@@ -111,7 +111,7 @@ class RedemptionPersistenceTests extends RedemptionTestSupport {
         }
         assertThat(jdbc.queryForObject("SELECT count(*) FROM pg_constraint WHERE conrelid='loyalty.reward_redemptions'::regclass AND contype='f' AND confdeltype='r' AND confupdtype='r'",Long.class)).isEqualTo(5);
         assertThatThrownBy(()->jdbc.execute("TRUNCATE loyalty.reward_redemptions CASCADE")).isInstanceOf(DataIntegrityViolationException.class);
-        assertThat(RewardRedemption.class.getMethods()).extracting(java.lang.reflect.Method::getName).noneMatch(name->name.startsWith("set")||name.startsWith("delete")||name.startsWith("fulfil")||name.startsWith("cancel"));
+        assertThat(RewardRedemption.class.getMethods()).extracting(java.lang.reflect.Method::getName).noneMatch(name->name.startsWith("set")||name.startsWith("delete")||name.startsWith("cancel"));
     }
     private org.postgresql.util.PSQLException postgres(Throwable error) {
         for(Throwable cause=error;cause!=null;cause=cause.getCause()) { if(cause instanceof org.postgresql.util.PSQLException postgres) { return postgres; } }

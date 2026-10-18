@@ -138,14 +138,14 @@ class RedemptionApiTests extends RedemptionTestSupport {
         setup.browser().send(post(REDEMPTIONS).header("Idempotency-Key",UUID.randomUUID()).contentType("application/json").content(payload(setup)),403);
         nothingRedeemed(setup.browser(),3000);
     }
-    @Test void resourceRecoveryIsOwnedAndNoLifecycleOrCollectionEndpointsExist() throws Exception {
+    @Test void resourceRecoveryIsOwnedAndCancellationAndDeletionRemainUnavailable() throws Exception {
         var setup = redemptionSetup(3000,3000); var result = redeem(setup,UUID.randomUUID(),201); var location = result.getResponse().getHeader("Location");
         var other = login(RoleCode.CUSTOMER); other.send(get(location),404);
         setup.browser().send(get(REDEMPTIONS+"/"+UUID.randomUUID()),404);
-        setup.browser().send(get(REDEMPTIONS),405);
+        setup.browser().send(get(REDEMPTIONS),200);
         setup.browser().send(delete(location).header("X-CSRF-TOKEN",setup.browser().csrf),405);
         setup.browser().send(post(location+"/cancellations").header("X-CSRF-TOKEN",setup.browser().csrf),404);
-        var staff = login(RoleCode.STAFF); staff.send(post("/api/v1/staff/redemptions/"+UUID.randomUUID()+"/fulfilments").header("X-CSRF-TOKEN",staff.csrf),404);
+        var staff = login(RoleCode.STAFF); staff.send(post("/api/v1/staff/redemptions/"+UUID.randomUUID()+"/fulfilments").header("X-CSRF-TOKEN",staff.csrf).header("Idempotency-Key",UUID.randomUUID()),404);
     }
     @Test void maximumSafeBalanceAndPriceRemainExact() throws Exception {
         var setup = redemptionSetup(9007199254740991L,9007199254740991L);

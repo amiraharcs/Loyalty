@@ -36,7 +36,7 @@ class MigrationTests {
     void migratesEmptyDatabaseWithOnlyImplementedDomainAndSessionTablesAndCanRunAgain() throws Exception {
         withEmptyDatabase(url -> {
             var flyway = flyway(url);
-            assertThat(flyway.migrate().migrationsExecuted).isEqualTo(14);
+            assertThat(flyway.migrate().migrationsExecuted).isEqualTo(15);
             flyway.validate();
             assertThat(flyway.migrate().migrationsExecuted).isZero();
             try (var connection = DriverManager.getConnection(url,
@@ -68,7 +68,7 @@ class MigrationTests {
                 insert.setObject(1, identity);
                 insert.executeUpdate();
             }
-            assertThat(flyway(url).migrate().migrationsExecuted).isEqualTo(11);
+            assertThat(flyway(url).migrate().migrationsExecuted).isEqualTo(12);
             try (var connection = DriverManager.getConnection(url,
                     PostgresTestDatabase.DATABASE.getUsername(), PostgresTestDatabase.DATABASE.getPassword());
                  var statement = connection.createStatement();
@@ -103,7 +103,7 @@ class MigrationTests {
                 }
             }
             var migrated = flyway(url);
-            assertThat(migrated.migrate().migrationsExecuted).isEqualTo(10);
+            assertThat(migrated.migrate().migrationsExecuted).isEqualTo(11);
             migrated.validate();
             assertThat(migrated.migrate().migrationsExecuted).isZero();
             try (var connection = DriverManager.getConnection(url,
@@ -174,7 +174,7 @@ class MigrationTests {
                         + UUID.randomUUID() + "','" + ids[2] + "',10,'ADJUSTMENT','" + ids[0] + "','Synthetic baseline',now())");
             }
             var upgraded = flyway(url);
-            assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(8); upgraded.validate();
+            assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(9); upgraded.validate();
             assertThat(upgraded.migrate().migrationsExecuted).isZero();
             try (var connection = DriverManager.getConnection(url, PostgresTestDatabase.DATABASE.getUsername(),
                     PostgresTestDatabase.DATABASE.getPassword()); var statement = connection.createStatement();
@@ -406,7 +406,7 @@ class MigrationTests {
             try(var connection=DriverManager.getConnection(url,PostgresTestDatabase.DATABASE.getUsername(),PostgresTestDatabase.DATABASE.getPassword());var statement=connection.createStatement()) {
                 statement.executeUpdate("INSERT INTO loyalty.point_transactions(id,account_id,signed_amount,type,actor_id,reason,created_at) VALUES ('"+entry+"','"+ids[2]+"',3000,'ADJUSTMENT','"+ids[0]+"','Synthetic migration fixture',now())");
             }
-            var upgraded=flyway(url); assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(1);
+            var upgraded=atVersion(url,"14"); assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(1);
             upgraded.validate(); assertThat(upgraded.migrate().migrationsExecuted).isZero();
             try(var connection=DriverManager.getConnection(url,PostgresTestDatabase.DATABASE.getUsername(),PostgresTestDatabase.DATABASE.getPassword());var statement=connection.createStatement()) {
                 try(var rows=statement.executeQuery("SELECT id,signed_amount,type,redemption_id FROM loyalty.point_transactions")) {
@@ -431,6 +431,25 @@ class MigrationTests {
             try(var connection=DriverManager.getConnection(url,PostgresTestDatabase.DATABASE.getUsername(),PostgresTestDatabase.DATABASE.getPassword());var statement=connection.createStatement();
                 var rows=statement.executeQuery("SELECT id,signed_amount FROM loyalty.point_transactions")) {
                 assertThat(rows.next()).isTrue();assertThat(rows.getObject("id",UUID.class)).isEqualTo(entry);assertThat(rows.getLong("signed_amount")).isEqualTo(-1);assertThat(rows.next()).isFalse();
+            }
+        });
+    }
+
+    @Test
+    void versionFifteenAddsTerminalGuardWithoutChangingPriorLedgerOrIdentity() throws Exception {
+        withEmptyDatabase(url->{
+            atVersion(url,"14").migrate();var ids=seedLegacyIdentity(url);UUID entry=UUID.randomUUID();
+            try(var connection=DriverManager.getConnection(url,PostgresTestDatabase.DATABASE.getUsername(),PostgresTestDatabase.DATABASE.getPassword());var statement=connection.createStatement()) {
+                statement.executeUpdate("INSERT INTO loyalty.point_transactions(id,account_id,signed_amount,type,actor_id,reason,created_at) VALUES ('"+entry+"','"+ids[2]+"',3000,'ADJUSTMENT','"+ids[0]+"','Synthetic migration fixture',now())");
+            }
+            var upgraded=flyway(url);assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(1);upgraded.validate();assertThat(upgraded.migrate().migrationsExecuted).isZero();
+            try(var connection=DriverManager.getConnection(url,PostgresTestDatabase.DATABASE.getUsername(),PostgresTestDatabase.DATABASE.getPassword());var statement=connection.createStatement()) {
+                try(var rows=statement.executeQuery("SELECT id,signed_amount FROM loyalty.point_transactions")) {
+                    assertThat(rows.next()).isTrue();assertThat(rows.getObject("id",UUID.class)).isEqualTo(entry);assertThat(rows.getLong("signed_amount")).isEqualTo(3000);assertThat(rows.next()).isFalse();
+                }
+                try(var rows=statement.executeQuery("SELECT count(*) FROM pg_trigger WHERE tgrelid='loyalty.reward_redemptions'::regclass AND tgname='redemption_terminal_guard'")) {
+                    assertThat(rows.next()).isTrue();assertThat(rows.getInt(1)).isEqualTo(1);
+                }
             }
         });
     }
