@@ -140,8 +140,8 @@ under `store/model`, `store/repository` and `store/service`. Loyalty models,
 repositories and internal services live under `loyalty/model`,
 `loyalty/repository` and `loyalty/service`. Visit persistence and internal
 confirmation live under `visit/model`, `visit/repository` and `visit/service`.
-Other domain boundaries remain
-package placeholders. Registration DTOs/controllers, validation and services live under `auth/api`,
+Game lives use `game/model`, `game/repository`, `game/service`, `game/api` and
+`game/config`. Other unimplemented domain boundaries remain package placeholders. Registration DTOs/controllers, validation and services live under `auth/api`,
 `auth/validation`, `auth/service`, with password/session configuration in
 `auth/config` and authentication infrastructure in `auth/security`. Shared
 rate limiting lives in `common/security`. The frontend is unchanged.
@@ -1690,7 +1690,84 @@ audit/retry rollback, FK/evidence consistency and database terminal-state guards
 ```
 
 Customer cancellation, refund entries, background expiry, prize-backed redemptions,
-staff search dashboards, admin redemption editing and Issue #28 remain deferred.
+staff search dashboards and admin redemption editing remain deferred.
+
+## Server-owned game lives (Issue #28)
+
+`GET /api/v1/customers/me/game-lives` requires an ACTIVE account and an explicit
+CUSTOMER grant. STAFF/ADMIN alone cannot read it; combined-role accounts may do so
+with CUSTOMER. Ownership comes from the authenticated session. No query parameters
+are accepted, including customerId, time, maximum or recharge overrides. The private
+`Cache-Control: no-store` response contains exactly:
+
+```json
+{"availableLives":2,"maxLives":3,"nextRechargeAt":"2026-10-18T11:00:00Z","serverTime":"2026-10-18T10:00:00Z"}
+```
+
+The server defaults to **three lives and independent two-hour recharges**. At server
+Clock time `now`, a consumption is active only while `rechargeAt > now`; exact equality
+restores its life. Available lives are maximum minus active consumption count.
+`nextRechargeAt` is the earliest future recharge, or null when full. Starts at 09:00,
+09:10 and 09:20 therefore recharge at 11:00, 11:10 and 11:20. There is no daily reset,
+serial six-hour recharge, browser counter or scheduler. Recharge uses elapsed UTC
+duration across midnight and DST. Persisted instants and serverTime use PostgreSQL
+microsecond precision. Reads neither consume lives nor mutate versions/history.
+
+`GameLifeRule` reads server properties `loyalty.game-lives.max-lives` and
+`loyalty.game-lives.recharge-interval` (`GAME_MAX_LIVES=3`,
+`GAME_LIFE_RECHARGE_INTERVAL=PT2H`). Startup rejects maxima outside 1–3 and nonpositive
+or sub-microsecond durations. Keep architecture defaults for v1. Changes affect new
+operations; stored rechargeAt snapshots never change. Do not lower the maximum while
+more consumptions are active: the service treats over-capacity history as corruption
+and fails safely, rather than hiding it with a clamped counter. Clients supply neither
+setting. Operational changes require reviewing effects on existing active history.
+
+`V16__create_game_life_state.sql` adds `game_life_state` (shared customer primary key
+and optimistic version) and append-only `game_life_consumptions` (UUID, owner,
+consumedAt, rechargeAt). Restrictive FKs retain ownership and history; nonnull finite
+timestamps and strictly later recharge are database constraints. The actual configured
+interval is snapshotted by the service. A `(customer_id,recharge_at)` index supports
+active-count/earliest-time queries. Recharged history remains immutable, including
+database update/delete/truncate guards. No mutable currentLives column is stored.
+Registration now creates user, CUSTOMER grant, profile, loyalty account, streak and
+GameLifeState in one transaction. V16 backfills every existing profile with an empty
+state, including retained profiles whose roles/status changed, without inventing life
+consumptions or changing other history. V1–V15 are unchanged.
+
+`GameLifeService.consumeOwnLife()` is **internal only**, CUSTOMER-authorized, and
+requires a caller-owned write transaction (`MANDATORY`). It resolves the current
+customer, takes `PESSIMISTIC_FORCE_INCREMENT` on GameLifeState, rechecks fresh active
+status/role, then captures server time and counts active consumptions. The lock and
+version protect the aggregate until the caller commits. With no life it throws
+`NoGameLivesException`, mapped by shared infrastructure to `409 NO_GAME_LIVES`.
+Otherwise it appends exactly one consumption at now with rechargeAt=now+configured
+interval and flushes inside the transaction. Exceptions must propagate to roll back
+the whole caller workflow; consumption and version both roll back. Simultaneous final-
+life attempts produce one success and one NO_GAME_LIVES. There is deliberately no
+public consumption route or service accepting caller-selected customer/time/rules.
+Capacity is enforced by this aggregate lock, not a database CHECK involving now().
+Privileged direct SQL can bypass command capacity; invariant checks surface corruption.
+
+**Issue #29 integration:** no GameSession, sessionId column, session lifecycle,
+score, leaderboard or frontend work is introduced. The session link column and its
+unique/FK constraints are deferred until the real session table exists. No placeholder
+sessions/null session links are manufactured. Issue #29 must create its session and
+consume a life in one transaction under this same aggregate lock, add start idempotency
+before aggregate locking, and enforce one active session. Existing history must be
+preserved by an explicit session-link migration strategy; standalone production
+consumption is not offered in this phase.
+
+Tests cover default/invalid rules, real cookie-session permissions/ownership, exact
+boundaries and staggered recharges, midnight/DST, historical retention, registration
+rollback/backfill, caller transaction requirements, database constraints/immutability,
+optimistic versions and concurrent final-life consumption. Actual PostgreSQL lock-wait
+tests verify time/role/status are re-evaluated after waiting. Both profiles validate
+Flyway V16 and Hibernate mappings against real PostgreSQL.
+
+```sh
+./mvnw -B -ntp '-Dtest=GameLife*Tests,MigrationTests' test
+./mvnw -B -ntp clean verify
+```
 
 ## References
 
