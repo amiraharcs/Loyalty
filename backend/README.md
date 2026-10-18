@@ -1734,28 +1734,15 @@ GameLifeState in one transaction. V16 backfills every existing profile with an e
 state, including retained profiles whose roles/status changed, without inventing life
 consumptions or changing other history. V1–V15 are unchanged.
 
-`GameLifeService.consumeOwnLife()` is **internal only**, CUSTOMER-authorized, and
-requires a caller-owned write transaction (`MANDATORY`). It resolves the current
-customer, takes `PESSIMISTIC_FORCE_INCREMENT` on GameLifeState, rechecks fresh active
-status/role, then captures server time and counts active consumptions. The lock and
-version protect the aggregate until the caller commits. With no life it throws
-`NoGameLivesException`, mapped by shared infrastructure to `409 NO_GAME_LIVES`.
-Otherwise it appends exactly one consumption at now with rechargeAt=now+configured
-interval and flushes inside the transaction. Exceptions must propagate to roll back
-the whole caller workflow; consumption and version both roll back. Simultaneous final-
-life attempts produce one success and one NO_GAME_LIVES. There is deliberately no
-public consumption route or service accepting caller-selected customer/time/rules.
-Capacity is enforced by this aggregate lock, not a database CHECK involving now().
-Privileged direct SQL can bypass command capacity; invariant checks surface corruption.
-
-**Issue #29 integration:** no GameSession, sessionId column, session lifecycle,
-score, leaderboard or frontend work is introduced. The session link column and its
-unique/FK constraints are deferred until the real session table exists. No placeholder
-sessions/null session links are manufactured. Issue #29 must create its session and
-consume a life in one transaction under this same aggregate lock, add start idempotency
-before aggregate locking, and enforce one active session. Existing history must be
-preserved by an explicit session-link migration strategy; standalone production
-consumption is not offered in this phase.
+The Issue #28 standalone internal consume operation has been replaced by
+`GameLifeService.consumeForSession(session)` in Issue #29. It requires a caller-owned
+write transaction (`MANDATORY`), a managed owned ACTIVE session and the already-held
+GameLifeState write lock. It explicitly force-increments the aggregate version and
+appends one immutable consumption using the session's server start timestamp and
+configured recharge interval. No customer/time/rule input or public consumption route
+is accepted. See the session workflow below for the complete transaction. Capacity
+uses aggregate locking, not a database CHECK involving now(); privileged SQL can bypass
+command capacity, but reads detect over-capacity history and fail safely.
 
 Tests cover default/invalid rules, real cookie-session permissions/ownership, exact
 boundaries and staggered recharges, midnight/DST, historical retention, registration
@@ -1768,6 +1755,115 @@ Flyway V16 and Hibernate mappings against real PostgreSQL.
 ./mvnw -B -ntp '-Dtest=GameLife*Tests,MigrationTests' test
 ./mvnw -B -ntp clean verify
 ```
+
+## Game session lifecycle (Issue #29)
+
+The server creates every GRND Jump session. Active accounts with an explicit CUSTOMER
+grant may start and recover their own sessions. STAFF/ADMIN alone have no game access.
+Existing session authentication, CSRF, private responses and closed default routing
+remain in force. No browser/localStorage event can set owner, identity, time, engine,
+status, lives or score.
+
+| Operation | Contract |
+| --- | --- |
+| `POST /api/v1/customers/me/game-sessions` | CSRF + UUID Idempotency-Key required; no body or an empty JSON object. Returns 201 with a relative Location and no-store caching. |
+| `GET /api/v1/customers/me/game-sessions/{id}` | Owned recovery; safe 404 for foreign/missing IDs. Returns current status/lives/server time, lazily expiring a stale ACTIVE run. |
+
+Both endpoints reject all query parameters. POST rejects nonempty objects, non-object
+JSON and malformed input with 400; ownership/time/engine/score overrides are never
+accepted. A start/recovery DTO contains exactly sessionId, status, startedAt, expiresAt,
+engineVersion, remainingLives, nextRechargeAt and serverTime. It exposes no customer ID,
+persistence version, consumption ID, audit data or future competition linkage.
+
+`GAME_SESSION_LIFETIME=PT15M` and `GAME_ENGINE_VERSION=v1` configure
+`loyalty.game-sessions.lifetime` and `loyalty.game-sessions.engine-version`. Lifetime
+must be positive with microsecond precision; engine version is 1–40 ASCII letters,
+digits, dots, underscores or hyphens, starting with a letter/digit. Keep architecture
+defaults for v1. Settings are server-only snapshots: changing them affects new starts
+and cannot rewrite an existing run or its life's rechargeAt. UTC elapsed duration,
+not business-date arithmetic, determines expiry across midnight/DST.
+
+`GameSession` has a generated UUID, customer owner, immutable startedAt/expiresAt/
+engineVersion, nullable completedAt, ACTIVE/COMPLETED/EXPIRED status and optimistic
+version. A session is live only while `serverNow < expiresAt`. Exact equality expires
+it. Completion fields/status are prepared for Issue #30, but no completion method,
+score model or completion/score endpoint is supplied now. Weekly-period linkage is
+entirely deferred until the competition phase.
+
+A single start transaction performs:
+
+1. Resolve the active CUSTOMER and take the existing actor/operation/key idempotency
+   advisory lock (`CUSTOMER_GAME_START`, canonical empty payload).
+2. Lock GameLifeState first (`PESSIMISTIC_WRITE`) and recheck current account/grants.
+   This non-incrementing lock also protects retry reads without advancing versions.
+3. Return a stored exact retry result before evaluating current session/life state.
+   A retry retains the original 201 body/Location and creation-time status/lives/time,
+   even after expiry; GET recovery reports the current state instead.
+4. For a new start, lock the existing ACTIVE GameSession if any, recheck eligibility,
+   then capture server Clock time at PostgreSQL microsecond precision. An unexpired
+   ACTIVE run gives `409 GAME_SESSION_ACTIVE`. A stale one becomes EXPIRED and is
+   flushed before creating a replacement to free the unique ACTIVE slot.
+5. Check lives at that instant; zero gives `409 NO_GAME_LIVES`. Create/flush the
+   server session, then call the MANDATORY life collaborator in the same transaction.
+   The collaborator requires the aggregate lock, advances its version explicitly and
+   appends one consumption with consumedAt exactly equal to startedAt.
+6. Append GAME_SESSION_STARTED audit and the idempotency result; commit session,
+   consumption, versions, expiry transitions, audits and retry record together.
+
+Business lock order is always GameLifeState then GameSession, after the infrastructure
+retry lock. Concurrent different-key starts produce one 201 and one conflict, even
+with several lives; same-key starts return the same creation and spend once. Failed
+starts leave no new session/consumption or success retry/audit. A failure after a stale
+session's lazy expiry also rolls that transition back; owned GET can expire it later.
+
+Recovery is deliberately a write transaction under the same state→session lock order.
+A stale run becomes EXPIRED once with GAME_SESSION_EXPIRED audit; unchanged reads
+produce no mutation/version change/audit. There is no scheduler. Navigation, refresh,
+disconnect, abandonment and expiry never refund a life, delete history or alter its
+independent two-hour recharge. Pending stale ACTIVE rows retain their unique slot
+until the next owned recovery/start transaction checks them.
+
+Idempotency is scoped to actor + operation + key, retained by existing infrastructure
+for at least 24 hours, and remains subject to fresh permissions on replay. The shared
+hash guard returns `409 IDEMPOTENCY_KEY_REUSED` for a different canonical payload.
+This empty-body API has only one valid payload: absent body and `{}` are equivalent;
+unsupported changed fields are 400 validation failures before command processing.
+After any later key-retention cleanup, a reused key is no longer a guaranteed replay;
+clients must preserve the Location and recover the known session rather than invent
+a new key after an ambiguous timeout. This issue adds no retry-record cleanup job.
+
+`V17__create_game_sessions.sql` creates the session table, restrictive customer FK,
+finite timestamp/status/completion constraints, snapshot/terminal-state guards and
+customer/start indexes. A partial unique index enforces one ACTIVE row per customer.
+It adds unique session_id to consumptions with a restrictive composite FK matching
+session ID, customer and startedAt. A deferred constraint trigger requires exactly
+one consumption for every new session before commit; a session alone cannot persist.
+Consumption identity/timestamps and session source snapshots remain immutable.
+
+**Legacy migration decision:** preserve every V16 consumption unchanged, with a null
+session link, without inventing fake sessions. A `CHECK(session_id IS NOT NULL) NOT
+VALID` intentionally grandfathers those old rows while rejecting every new unlinked
+INSERT. Historical rows cannot be updated/deleted, and new Java constructors require
+a session ID. Keep this deliberately unvalidated constraint while such history exists;
+do not run VALIDATE until an explicit reviewed historical strategy permits it.
+No historical session UUIDs, start times, scores or periods are fabricated. V1–V16
+are unchanged.
+
+Tests use real PostgreSQL for empty/legacy migrations, Hibernate mappings, paired-source
+constraints, ownership/FKs, immutable evidence, unique ACTIVE slots, exact expiry,
+independent recharge/no refunds, cookie/CSRF/role checks, same/different-key races and
+rollback before/after consumption and after retry-result writes. Lock-wait cases verify
+fresh expiry/role/status checks after actual PostgreSQL blocking. Existing life-only
+test fixtures now use real linked terminal sessions, while lifecycle acceptance tests
+exercise actual HTTP starts/recovery.
+
+```sh
+./mvnw -B -ntp '-Dtest=GameSession*Tests,GameLife*Tests,MigrationTests' test
+./mvnw -B -ntp clean verify
+```
+
+Issue #30 remains deferred: GameScore, score submission/completion, plausibility checks,
+anti-cheat, leaderboard, weekly assignment, prizes and frontend game integration.
 
 ## References
 
