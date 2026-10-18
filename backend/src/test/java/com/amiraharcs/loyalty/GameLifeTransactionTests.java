@@ -12,14 +12,14 @@ import static org.assertj.core.api.Assertions.*;
 class GameLifeTransactionTests extends GameLifeTestSupport {
     @Test void internalConsumeAndProvisioningRequireCallerOwnedTransaction() throws Exception {
         var browser=login(RoleCode.CUSTOMER);assume(browser,RoleCode.CUSTOMER);
-        assertThatThrownBy(lives::consumeOwnLife).isInstanceOf(IllegalTransactionStateException.class);
+        assertThatThrownBy(() -> lives.consumeForSession(null)).isInstanceOf(IllegalTransactionStateException.class);
         assertThatThrownBy(()->lives.createForRegistration(customer(browser))).isInstanceOf(IllegalTransactionStateException.class);
         assertThat(consumed(customer(browser))).isZero();assertThat(version(customer(browser))).isZero();
     }
     @Test void callerRollbackRestoresConsumptionAndAggregateVersion() throws Exception {
         var browser=login(RoleCode.CUSTOMER);var owner=customer(browser);assume(browser,RoleCode.CUSTOMER);
         assertThatThrownBy(()->new TransactionTemplate(manager).executeWithoutResult(tx->{
-            var consumed=lives.consumeOwnLife();
+            var consumed=consume(browser);
             assertThat(jdbc.queryForObject("SELECT count(*) FROM loyalty.game_life_consumptions WHERE id=?",Long.class,consumed.getId())).isEqualTo(1);
             assertThat(version(owner)).isEqualTo(1);
             throw new IllegalStateException("Synthetic future session failure");
@@ -35,7 +35,7 @@ class GameLifeTransactionTests extends GameLifeTestSupport {
                 assume(browser,RoleCode.CUSTOMER);ready.countDown();
                 try {
                     if(!start.await(10,TimeUnit.SECONDS)) {throw new IllegalStateException("Race did not start");}
-                    new TransactionTemplate(manager).executeWithoutResult(tx->lives.consumeOwnLife());return "CONSUMED";
+                    consume(browser);return "CONSUMED";
                 } catch(NoGameLivesException exception) {return exception.code().name();}
                 finally {SecurityContextHolder.clearContext();}
             };

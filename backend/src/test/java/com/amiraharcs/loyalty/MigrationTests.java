@@ -36,7 +36,7 @@ class MigrationTests {
     void migratesEmptyDatabaseWithOnlyImplementedDomainAndSessionTablesAndCanRunAgain() throws Exception {
         withEmptyDatabase(url -> {
             var flyway = flyway(url);
-            assertThat(flyway.migrate().migrationsExecuted).isEqualTo(16);
+            assertThat(flyway.migrate().migrationsExecuted).isEqualTo(17);
             flyway.validate();
             assertThat(flyway.migrate().migrationsExecuted).isZero();
             try (var connection = DriverManager.getConnection(url,
@@ -46,7 +46,7 @@ class MigrationTests {
                          + "WHERE table_schema = 'loyalty' ORDER BY table_name")) {
                 var names = new java.util.ArrayList<String>();
                 while (tables.next()) { names.add(tables.getString(1)); }
-                assertThat(names).containsExactly("audit_logs", "customer_profiles", "flyway_schema_history", "game_life_consumptions", "game_life_state", "idempotency_records", "loyalty_accounts", "point_transactions", "qr_identity_tokens", "qr_scan_events", "reward_redemptions", "rewards", "roles", "scan_resolutions", "spring_session", "spring_session_attributes", "staff_store", "stores", "streaks", "user_roles", "users", "visits");
+                assertThat(names).containsExactly("audit_logs", "customer_profiles", "flyway_schema_history", "game_life_consumptions", "game_life_state", "game_sessions", "idempotency_records", "loyalty_accounts", "point_transactions", "qr_identity_tokens", "qr_scan_events", "reward_redemptions", "rewards", "roles", "scan_resolutions", "spring_session", "spring_session_attributes", "staff_store", "stores", "streaks", "user_roles", "users", "visits");
             }
             assertThatThrownBy(flyway::clean).isInstanceOf(FlywayException.class).hasMessageContaining("cleanDisabled");
         });
@@ -68,7 +68,7 @@ class MigrationTests {
                 insert.setObject(1, identity);
                 insert.executeUpdate();
             }
-            assertThat(flyway(url).migrate().migrationsExecuted).isEqualTo(13);
+            assertThat(flyway(url).migrate().migrationsExecuted).isEqualTo(14);
             try (var connection = DriverManager.getConnection(url,
                     PostgresTestDatabase.DATABASE.getUsername(), PostgresTestDatabase.DATABASE.getPassword());
                  var statement = connection.createStatement();
@@ -103,7 +103,7 @@ class MigrationTests {
                 }
             }
             var migrated = flyway(url);
-            assertThat(migrated.migrate().migrationsExecuted).isEqualTo(12);
+            assertThat(migrated.migrate().migrationsExecuted).isEqualTo(13);
             migrated.validate();
             assertThat(migrated.migrate().migrationsExecuted).isZero();
             try (var connection = DriverManager.getConnection(url,
@@ -174,7 +174,7 @@ class MigrationTests {
                         + UUID.randomUUID() + "','" + ids[2] + "',10,'ADJUSTMENT','" + ids[0] + "','Synthetic baseline',now())");
             }
             var upgraded = flyway(url);
-            assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(10); upgraded.validate();
+            assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(11); upgraded.validate();
             assertThat(upgraded.migrate().migrationsExecuted).isZero();
             try (var connection = DriverManager.getConnection(url, PostgresTestDatabase.DATABASE.getUsername(),
                     PostgresTestDatabase.DATABASE.getPassword()); var statement = connection.createStatement();
@@ -458,7 +458,7 @@ class MigrationTests {
     void versionSixteenBackfillsExistingProfilesWithoutInventingConsumptionHistory() throws Exception {
         withEmptyDatabase(url->{
             atVersion(url,"15").migrate();var ids=seedLegacyIdentity(url);
-            var upgraded=flyway(url);assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(1);
+            var upgraded=atVersion(url,"16");assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(1);
             upgraded.validate();assertThat(upgraded.migrate().migrationsExecuted).isZero();
             try(var connection=DriverManager.getConnection(url,PostgresTestDatabase.DATABASE.getUsername(),PostgresTestDatabase.DATABASE.getPassword());var statement=connection.createStatement()) {
                 try(var rows=statement.executeQuery("SELECT customer_id,version FROM loyalty.game_life_state")) {
@@ -469,6 +469,29 @@ class MigrationTests {
                     assertThat(rows.next()).isTrue();assertThat(rows.getLong("lives")).isZero();
                     assertThat(rows.getLong("users")).isEqualTo(1);assertThat(rows.getLong("accounts")).isEqualTo(1);
                 }
+            }
+        });
+    }
+
+    @Test
+    void versionSeventeenPreservesLegacyConsumptionsWithoutInventingSessionsAndRequiresNewLinks() throws Exception {
+        withEmptyDatabase(url->{
+            atVersion(url,"15").migrate();var ids=seedLegacyIdentity(url);atVersion(url,"16").migrate();
+            var consumption=UUID.randomUUID();
+            try(var connection=DriverManager.getConnection(url,PostgresTestDatabase.DATABASE.getUsername(),PostgresTestDatabase.DATABASE.getPassword());var statement=connection.createStatement()) {
+                statement.executeUpdate("INSERT INTO loyalty.game_life_consumptions(id,customer_id,consumed_at,recharge_at) VALUES ('"+consumption+"','"+ids[1]+"','2026-10-18T09:00:00Z','2026-10-18T11:00:00Z')");
+            }
+            var latest=flyway(url);assertThat(latest.migrate().migrationsExecuted).isEqualTo(1);latest.validate();
+            assertThat(latest.migrate().migrationsExecuted).isZero();
+            try(var connection=DriverManager.getConnection(url,PostgresTestDatabase.DATABASE.getUsername(),PostgresTestDatabase.DATABASE.getPassword());var statement=connection.createStatement()) {
+                try(var rows=statement.executeQuery("SELECT id,customer_id,consumed_at,recharge_at,session_id FROM loyalty.game_life_consumptions")) {
+                    assertThat(rows.next()).isTrue();assertThat(rows.getObject("id",UUID.class)).isEqualTo(consumption);
+                    assertThat(rows.getObject("customer_id",UUID.class)).isEqualTo(ids[1]);assertThat(rows.getObject("session_id")).isNull();
+                    assertThat(rows.getTimestamp("consumed_at").toInstant()).isEqualTo(java.time.Instant.parse("2026-10-18T09:00:00Z"));
+                    assertThat(rows.getTimestamp("recharge_at").toInstant()).isEqualTo(java.time.Instant.parse("2026-10-18T11:00:00Z"));assertThat(rows.next()).isFalse();
+                }
+                try(var rows=statement.executeQuery("SELECT count(*) FROM loyalty.game_sessions")) {assertThat(rows.next()).isTrue();assertThat(rows.getLong(1)).isZero();}
+                assertThatThrownBy(()->statement.executeUpdate("INSERT INTO loyalty.game_life_consumptions(id,customer_id,consumed_at,recharge_at) VALUES ('"+UUID.randomUUID()+"','"+ids[1]+"',now(),now()+interval '2 hours')")).isInstanceOf(java.sql.SQLException.class);
             }
         });
     }

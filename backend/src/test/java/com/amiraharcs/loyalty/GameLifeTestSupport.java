@@ -13,9 +13,19 @@ import static org.mockito.Mockito.when;
 abstract class GameLifeTestSupport extends StaffQrTestSupport {
     static final String LIVES = "/api/v1/customers/me/game-lives";
     @Autowired GameLifeService lives;
+    @Autowired jakarta.persistence.EntityManager gameEntities;
     GameLifeConsumption consume(Browser browser) {
         assume(browser, RoleCode.CUSTOMER);
-        return new TransactionTemplate(manager).execute(tx -> lives.consumeOwnLife());
+        return new TransactionTemplate(manager).execute(tx -> {
+            // Isolate life calculation with real linked, terminal session fixtures.
+            var customer = lives.lockOwnState();
+            var now = clock.instant().truncatedTo(java.time.temporal.ChronoUnit.MICROS);
+            var session = new com.amiraharcs.loyalty.game.model.GameSession(customer.customerId(), now, now.plusSeconds(900), "v1");
+            gameEntities.persist(session); gameEntities.flush();
+            var consumption = lives.consumeForSession(session);
+            session.expireIfStale(session.getExpiresAt()); gameEntities.flush();
+            return consumption;
+        });
     }
     GameLivesResponse snapshot(Browser browser, Instant now) {
         when(clock.instant()).thenReturn(now);

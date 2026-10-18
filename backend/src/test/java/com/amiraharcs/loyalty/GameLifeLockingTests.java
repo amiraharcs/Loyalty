@@ -21,7 +21,7 @@ class GameLifeLockingTests extends GameLifeTestSupport {
                 jdbc.queryForObject("SELECT version FROM loyalty.game_life_state WHERE customer_id=? FOR UPDATE",Long.class,owner);
                 var future=worker.submit(()->{
                     assume(browser,RoleCode.CUSTOMER);
-                    try {new TransactionTemplate(manager).executeWithoutResult(inner->lives.consumeOwnLife());return 200;}
+                    try {consume(browser);return 200;}
                     catch(AccessDeniedException denied) {return 403;}
                     catch(BadCredentialsException disabled) {return 401;}
                     finally {SecurityContextHolder.clearContext();}

@@ -30,8 +30,8 @@ class GameLifeRuleTests {
     }
     @Test void consumptionRequiresOwnerAndStrictlyLaterRecharge() {
         var now=Instant.parse("2026-10-14T12:00:00Z");var owner=UUID.randomUUID();
-        assertThatThrownBy(()->new GameLifeConsumption(owner,now,now)).isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(()->new GameLifeConsumption(owner,now,now.minusSeconds(1))).isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(()->new GameLifeConsumption(null,now,now.plusSeconds(7200))).isInstanceOf(NullPointerException.class);
+        assertThatThrownBy(()->new GameLifeConsumption(owner,UUID.randomUUID(),now,now)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(()->new GameLifeConsumption(owner,UUID.randomUUID(),now,now.minusSeconds(1))).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(()->new GameLifeConsumption(null,UUID.randomUUID(),now,now.plusSeconds(7200))).isInstanceOf(NullPointerException.class);
     }
 }

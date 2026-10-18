@@ -67,8 +67,16 @@ class GameLifeApiTests extends GameLifeTestSupport {
     }
     @Test void corruptCapacityFailsSafelyInsteadOfHidingItByClamping() throws Exception {
         var customer=login(RoleCode.CUSTOMER);var owner=customer(customer);
-        for(int i=0;i<4;i++) {jdbc.update("INSERT INTO loyalty.game_life_consumptions VALUES (?,?,?,?)",UUID.randomUUID(),owner,
-                java.sql.Timestamp.from(NOW),java.sql.Timestamp.from(NOW.plusSeconds(7200)));}
+        // Privileged SQL may bypass the aggregate command; still provide real paired source evidence.
+        for(int i=0;i<4;i++) {
+            var session=UUID.randomUUID();
+            new org.springframework.transaction.support.TransactionTemplate(manager).executeWithoutResult(tx->{
+                jdbc.update("INSERT INTO loyalty.game_sessions(id,customer_id,started_at,expires_at,status,engine_version) VALUES (?, ?, ?, ?, 'EXPIRED', 'v1')",session,owner,
+                        java.sql.Timestamp.from(NOW),java.sql.Timestamp.from(NOW.plusSeconds(900)));
+                jdbc.update("INSERT INTO loyalty.game_life_consumptions(id,customer_id,consumed_at,recharge_at,session_id) VALUES (?,?,?,?,?)",UUID.randomUUID(),owner,
+                        java.sql.Timestamp.from(NOW),java.sql.Timestamp.from(NOW.plusSeconds(7200)),session);
+            });
+        }
         var result=customer.send(get(LIVES),500);
         assertThat(code(result)).isEqualTo("INTERNAL_ERROR");
         assertThat(result.getResponse().getContentAsString()).doesNotContain("invariant", "GameLife", "loyalty.");
