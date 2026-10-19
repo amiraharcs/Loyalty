@@ -2306,3 +2306,70 @@ Errors follow the shared RFC 9457 contract: invalid input 400, absent prize/rewa
 assignment 404, stale edit/occupied slot/invalid correction state 409, missing
 session 401, missing role or CSRF 403. Weekly settlement, immutable weekly outcomes,
 prize reservation/redemption/fulfilment and later P9 work remain deferred.
+
+## Staff customer lookup (Issue #35)
+
+`GET /api/v1/staff/customers?identifier=<member UUID>&storeId=<store UUID>`
+requires an authenticated ACTIVE user with an explicit STAFF grant. ADMIN alone
+is insufficient. `StaffStoreScopeService` verifies an ACTIVE store and active
+assignment before any customer read, and rechecks inside the read snapshot.
+Customers may be served at any assigned store; this is not customer/store
+membership. The redemption projection is strictly limited to the requested store.
+
+The only identifier is the exact existing CustomerProfile UUID, in canonical
+36-character UUID shape (hex is case-insensitive). It is an opaque service
+identifier, never permission. No email, alias, name, prefix or fuzzy search is
+supported. Missing/malformed UUIDs and extra/repeated query parameters return
+400. Unknown, disabled and non-CUSTOMER identities all return the same generic
+404; unassigned/inactive stores also return the standard scoped 404. Missing
+sessions return 401 and wrong roles 403, using the existing RFC 9457 contract.
+
+The no-store response has exactly `displayName`, `balance`, `currentStreak`,
+`pendingRedemptions`, and `hasMorePendingRedemptions`. Balance is the exact ledger
+sum with JavaScript-safe integer enforcement. Streak uses the server Clock and
+Europe/London dates; read-time expiry never updates the stored projection.
+Pending redemptions expose only `redemptionId`, frozen `rewardName` and
+`rewardDescription`, `status` and `expiresAt`. Only this customer's unexpired
+PENDING redemptions at this store appear, newest first, at most five; an explicit
+more flag avoids suggesting a truncated list is complete. No match gives an
+empty list. Other stores, expired/fulfilled/history entries and prize history
+are excluded. There are exactly two projection queries regardless of result
+size; no entity traversal or lazy N+1 queries. The snapshot uses a short read-only
+REPEATABLE READ transaction, separate from auditing.
+
+No customer ID is echoed and no lookup token/table is introduced. A future
+manual-resolution request can retain the original opaque identifier client-side,
+but must resolve it again and recheck identity, STAFF/store scope and all visit
+rules. This response grants no authority and is not a ScanResolution. Issue #36,
+member-ID presentation, manual resolution, staff UI and broader support searches
+remain deferred. `/staff/visits` still accepts only a trusted ScanResolution;
+lookup never creates/consumes one, creates a visit, changes points/streaks, consumes
+QRs, or redeems/fulfils benefits.
+
+Every attempt reaching the authenticated STAFF service appends a durable
+`CUSTOMER_LOOKUP` audit event in an independent transaction. It contains the
+verified actor, server time, server request ID, fixed outcome and only an
+already-authorised store (otherwise null). A successful event targets the
+resolved customer UUID; failures target the request UUID with target type
+CUSTOMER_LOOKUP_REQUEST, never an unverified customer. Metadata contains only
+SUCCESS, NOT_FOUND, STORE_DENIED, INVALID_REQUEST, RATE_LIMITED or FAILED.
+There is no raw identifier/query, contact value, exception text or body dump.
+Unauthenticated/wrong-role requests remain the existing security boundary's
+responsibility; lookup does not fabricate an actor. Audit storage failure fails
+closed with a safe 500 and never discloses a lookup result.
+
+Budgets count all authenticated attempts, including invalid/no-match requests:
+30/minute/staff and 120/minute/remote IP, configurable using
+`CUSTOMER_LOOKUP_STAFF_LIMIT` and `CUSTOMER_LOOKUP_IP_LIMIT` (1–1000). Throttling
+happens before parsing/scope queries, so throttled events have no trusted store.
+429 includes Retry-After and the generated request ID. These are bounded,
+per-process sliding windows, consistent with existing limiters; multiple replicas
+need a shared gateway limit before production scaling. Forwarded IP headers are
+not trusted by the application.
+
+A narrowly scoped servlet wrapper hides this route's query string from framework
+request descriptions; Spring MVC detailed request logging remains disabled.
+Never enable request-parameter/bind-value TRACE logging in production. Configure
+reverse-proxy/access logs to record the path without lookup query values as well;
+application filtering cannot redact a proxy's original request line. No schema
+migration is needed; V1–V21 remain unchanged.
