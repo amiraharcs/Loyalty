@@ -1,5 +1,2 @@
-/**
- * Ranking projections within the Competition boundary.
- * <p>Reserved package boundary; business types are added in later issues.</p>
- */
+/** Authoritative paginated ranking read models within the Competition boundary. */
 package com.amiraharcs.loyalty.leaderboard;

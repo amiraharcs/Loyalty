@@ -94,6 +94,8 @@ management:
       enabled: true
 
 loyalty:
+  leaderboards:
+    cursor-key-base64: ${LEADERBOARD_CURSOR_KEY_BASE64:}
   game-scores:
     customer-limit: ${GAME_SCORE_CUSTOMER_LIMIT:60}
     ip-limit: ${GAME_SCORE_IP_LIMIT:240}

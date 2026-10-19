@@ -49,6 +49,7 @@ class FoundationSecurityConfiguration {
                         .requestMatchers(HttpMethod.HEAD, "/actuator/health", "/actuator/health/liveness",
                                 "/actuator/health/readiness").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/rewards").hasAnyAuthority(RoleAuthorities.CUSTOMER, RoleAuthorities.STAFF)
+                        .requestMatchers(HttpMethod.GET, "/api/v1/leaderboards/weekly", "/api/v1/leaderboards/all-time").hasAuthority(RoleAuthorities.CUSTOMER)
                         .requestMatchers("/api/v1/customers/**").hasAuthority(RoleAuthorities.CUSTOMER)
                         .requestMatchers("/api/v1/staff/**").hasAuthority(RoleAuthorities.STAFF)
                         .requestMatchers("/api/v1/admin/**").hasAuthority(RoleAuthorities.ADMIN)
