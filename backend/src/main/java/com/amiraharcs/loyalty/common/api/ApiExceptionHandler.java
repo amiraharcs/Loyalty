@@ -134,6 +134,11 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
         return response(ApiErrorCode.RESOURCE_NOT_FOUND, List.of(), HttpHeaders.EMPTY, request);
     }
 
+    @ExceptionHandler(InvalidRequestException.class)
+    ResponseEntity<Object> invalidRequest(InvalidRequestException exception, WebRequest request) {
+        return response(ApiErrorCode.VALIDATION_ERROR, List.of(), HttpHeaders.EMPTY, request);
+    }
+
     @ExceptionHandler(ConflictException.class)
     ResponseEntity<Object> conflict(ConflictException exception, WebRequest request) {
         return response(exception.code(), List.of(), HttpHeaders.EMPTY, request);

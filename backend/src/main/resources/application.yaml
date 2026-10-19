@@ -19,6 +19,8 @@ spring:
       include-binding-errors: never
       include-stacktrace: never
       include-exception: false
+  mvc:
+    log-request-details: false
   jackson:
     deserialization:
       fail-on-unknown-properties: true
@@ -61,6 +63,7 @@ logging:
     org.springframework.session: INFO
     org.springframework.security: INFO
     org.hibernate.orm.jdbc.bind: "OFF"
+    org.springframework.jdbc.core.StatementCreatorUtils: "OFF"
   pattern:
     correlation: "[requestId=%X{requestId:-}] "
 
@@ -94,6 +97,9 @@ management:
       enabled: true
 
 loyalty:
+  customer-lookup:
+    staff-limit: ${CUSTOMER_LOOKUP_STAFF_LIMIT:30}
+    ip-limit: ${CUSTOMER_LOOKUP_IP_LIMIT:120}
   leaderboards:
     cursor-key-base64: ${LEADERBOARD_CURSOR_KEY_BASE64:}
   game-scores:
