@@ -75,6 +75,6 @@ class GameSessionPersistenceTests extends GameSessionTestSupport {
         org.mockito.Mockito.when(clock.instant()).thenReturn(session.expiresAt());recovery(browser,session.sessionId());
         rejected(()->jdbc.update("UPDATE loyalty.game_sessions SET status='ACTIVE' WHERE id=?",session.sessionId()),"23514");
         rejected(()->jdbc.update("UPDATE loyalty.game_sessions SET status='COMPLETED',completed_at=started_at+interval '1 minute' WHERE id=?",session.sessionId()),"23514");
-        assertThat(jdbc.queryForObject("SELECT count(*) FROM information_schema.tables WHERE table_schema='loyalty' AND table_name='weekly_periods'",Long.class)).isZero();
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM information_schema.tables WHERE table_schema='loyalty' AND table_name='weekly_periods'",Long.class)).isEqualTo(1);
     }
 }

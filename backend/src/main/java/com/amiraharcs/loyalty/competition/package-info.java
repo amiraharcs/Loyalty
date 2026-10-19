@@ -1,5 +1,2 @@
-/**
- * Competition periods, prizes and customer entitlements.
- * <p>Reserved package boundary; business types are added in later issues.</p>
- */
+/** Competition periods; prize assignment and settlement remain deferred. */
 package com.amiraharcs.loyalty.competition;

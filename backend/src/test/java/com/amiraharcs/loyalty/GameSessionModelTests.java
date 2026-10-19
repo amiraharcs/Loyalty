@@ -17,13 +17,14 @@ class GameSessionModelTests {
         runner.withPropertyValues("loyalty.game-sessions.lifetime=PT10M","loyalty.game-sessions.engine-version=v2")
                 .run(context->assertThat(context.getBean(GameSessionRule.class)).isEqualTo(new GameSessionRule(Duration.ofMinutes(10),"v2")));
         runner.withPropertyValues("loyalty.game-sessions.lifetime=PT0S").run(context->assertThat(context).hasFailed());
+        runner.withPropertyValues("loyalty.game-sessions.lifetime=PT16M").run(context->assertThat(context).hasFailed());
     }
     @ParameterizedTest @ValueSource(strings={"", " ", "bad version", "<script>", "abcdefghijklmnopqrstuvwxyz0123456789too-long"})
     void engineVersionIsExplicitBoundedServerData(String version) {
         assertThatThrownBy(()->new GameSessionRule(Duration.ofMinutes(15),version)).isInstanceOf(IllegalArgumentException.class);
     }
     @Test void lifetimeMustBePositiveWithDatabasePrecision() {
-        for(var duration:java.util.List.of(Duration.ZERO,Duration.ofSeconds(-1),Duration.ofNanos(1))) {
+        for(var duration:java.util.List.of(Duration.ZERO,Duration.ofSeconds(-1),Duration.ofNanos(1),Duration.ofMinutes(15).plusNanos(1000),Duration.ofMinutes(16))) {
             assertThatThrownBy(()->new GameSessionRule(duration,"v1")).isInstanceOf(IllegalArgumentException.class);
         }
     }

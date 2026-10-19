@@ -16,6 +16,9 @@ public class GameSession {
     @Column(name = "completed_at") private Instant completedAt;
     @Enumerated(EnumType.STRING) @Column(nullable = false, length = 16) private GameSessionStatus status;
     @Column(name = "engine_version", nullable = false, updatable = false, length = 40) private String engineVersion;
+    // BEFORE INSERT trigger derives this from startedAt; Hibernate reads the generated link back.
+    @org.hibernate.annotations.Generated(event = org.hibernate.generator.EventType.INSERT)
+    @Column(name="weekly_period_id",nullable=false,updatable=false,insertable=false) private UUID weeklyPeriodId;
     @Version @Column(nullable = false) private long version;
     protected GameSession() { }
     public GameSession(UUID customerId, Instant startedAt, Instant expiresAt, String engineVersion) {
@@ -49,5 +52,6 @@ public class GameSession {
     public Instant getCompletedAt() { return completedAt; }
     public GameSessionStatus getStatus() { return status; }
     public String getEngineVersion() { return engineVersion; }
+    public UUID getWeeklyPeriodId() { return weeklyPeriodId; }
     public long getVersion() { return version; }
 }
