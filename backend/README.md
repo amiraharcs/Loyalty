@@ -2099,3 +2099,108 @@ Run `./mvnw -Dtest='Leaderboard*Tests,WeeklyPeriod*Tests' test` for focused chec
 Prize catalogue, cutoff-based settlement/snapshots, CustomerPrize, moderation,
 Friends/consent and frontend leaderboard integration remain deferred. The Friends
 prototype stays a frontend fixture. Issue #33 has not been started.
+
+## Prize definitions and streak entitlements (Issue #33)
+
+`V20__create_prizes_and_customer_prizes.sql` adds Prize and CustomerPrize. A Prize
+is a non-financial catalogue definition: UUID, name, active flag, typed benefit
+and trigger, reward reference or integer percentage, human-readable description,
+weekly rank where applicable, timestamps and optimistic version. Supported types
+are `REWARD` and `PERCENT_DISCOUNT`; triggers are `WEEKLY_RANK` and
+`STREAK_MILESTONE`. No cash, money or points are represented by an entitlement.
+
+The only initial definitions are the architecture's production v1 benefits:
+
+| Trigger | Benefit |
+| --- | --- |
+| Weekly rank 1 | One free coffee |
+| Weekly rank 2 | 50% discount on a coffee |
+| Weekly rank 3 | 25% discount on a coffee |
+| Weekly rank 4 | 10% discount on a coffee |
+| Each completed ten-day streak block | One free coffee |
+
+Free-coffee definitions reference the existing Free coffee Reward. Prize and
+Reward catalogue data describe future awards; CustomerPrize independently freezes
+prize name, benefit type/description/percentage, reward UUID/name/description,
+trigger, server award time and expiry. Later edits/deactivation cannot rewrite an
+issued entitlement. No mutable point cost is copied: assignment never debits or
+credits a balance. A normal qualifying visit still creates its existing EARN;
+the prize adds no ledger transaction.
+
+`StreakService.recordVisit` invokes the internal PrizeAssignmentService only when
+a newly confirmed qualifying date advances the count to 10, 20, 30, etc. Visit,
+EARN, Streak, CustomerPrize and successful audit commit in the same transaction.
+A failure after entitlement insertion rolls all of them back, including QR source
+consumption and idempotency completion in the outer confirmation workflow. The
+assignment service verifies the persisted Visit/current milestone under the same
+customer-account lock and checks assigned staff/store scope. Combined
+CUSTOMER+STAFF/ADMIN accounts retain loyalty streak eligibility; self-service
+confirmation remains forbidden by the existing visit rules.
+
+The unique `(customer_id, trigger_visit_id, prize_id)` key is the final duplicate
+barrier; the account lock serialises competing issuers. An exact trigger retry
+returns its original entitlement without moving award/expiry or appending another
+audit. Same-day nonqualifying attempts and reads never award prizes. An inactive
+streak definition intentionally skips a new award while preserving the qualifying
+visit/EARN/streak; reenabling does not automatically backfill skipped milestones.
+A missing required definition is a configuration failure and rolls the workflow
+back. Reward availability is not redemption authority here: its data is snapshotted
+as the benefit definition, and prize redemption is still unavailable.
+
+Assignment uses the injected server Clock, truncated to PostgreSQL microseconds:
+`expiresAt = awardedAt + Duration.ofDays(7)` (168 elapsed hours, including across
+DST). The Visit's confirmation date determines the streak even if assignment
+occurs just after London midnight. Assignment-clock regression before the Visit
+fails the transaction. A later streak reset does not remove an issued prize.
+
+New rows are AVAILABLE only. The full future status vocabulary is AVAILABLE,
+RESERVED, REDEEMED, EXPIRED and REVOKED, but operational transitions are not
+implemented. At `now >= expiresAt`, history projects stored AVAILABLE as EXPIRED;
+the read path performs no update and the available-entitlement repository query
+excludes it. Persisted snapshots/source/timestamps are immutable, with restrictive
+FKs and no delete/truncate. A later migration must introduce deliberate
+reservation/redemption transitions without weakening snapshot immutability.
+
+`GET /api/v1/customers/me/prizes` requires an active explicit CUSTOMER grant and
+returns `Cache-Control: no-store`. Staff/admin alone are denied. Ownership comes
+from the authenticated principal and constrains every history query. Parameters:
+`size` (default 20, range 1–100) and `cursor`; unknown, blank, repeated and malformed
+parameters return 400. History uses keyset `awardedAt DESC, id DESC`, with `items`,
+`nextCursor` (null at end) and `hasNext`. The bounded opaque cursor follows the
+existing owned-history tuple convention and binds to a customer-scope digest;
+it contains no raw customer UUID. Regardless of cursor input, the database query
+always constrains ownership. It is a live history, not a cross-request snapshot.
+
+Each item includes `customerPrizeId`, `prizeName`, `benefitType`,
+`benefitDescription`, `percentage` (null for REWARD), `rewardId`, `rewardName`,
+`rewardDescription`, effective `status`, `awardedAt`, `expiresAt` and `triggerType`.
+No customer/user IDs, versions, source Visit/assignment IDs or admin/audit fields
+are returned. Expired entitlements remain in history.
+
+Migration creates **zero CustomerPrize rows** and does not rewrite old streaks,
+visits or ledgers. Automatic prize assignment begins with newly confirmed
+milestones after V20; uncertain historical crossings are not retroactively
+materialised, including by reads or registration. New registrations receive no
+starter prizes. Normal read-time expiry requires no scheduler.
+
+WeeklyPrizeRules prepares active-definition selection for ranks 1–4 and fresh
+eligibility checks: active CUSTOMER required; STAFF/ADMIN holders excluded. It is
+an internal read-only collaborator, with no public assignment endpoint. It does
+not rank, settle, schedule, assign prizes, or change WeeklyPeriod status.
+WeeklyPrizeAssignment does not yet exist, so V20 has no invented assignment IDs
+or dangling assignment column. Database source checks currently permit only
+owned streak Visit sources. Issue #34 must add the actual WeeklyPrizeAssignment
+entity/FK and extend source constraints before weekly CustomerPrize creation;
+settlement must recheck eligibility and use settled outcome evidence atomically.
+
+Admin prize catalogue CRUD is deferred to a later admin phase. This issue adds no
+admin route, arbitrary award endpoint, prize redemption, reservation, fulfilment,
+frontend integration or Friends backend. Fixed definitions are versioned migration
+data; future management must use allowlisted DTOs, ADMIN/CSRF, audited mutations
+and optimistic concurrency. Issue #34 is not started here.
+
+Focused verification: `./mvnw -Dtest='Prize*Tests,Streak*Tests' test`.
+`./mvnw clean verify` also covers existing auth, loyalty, reward, game and ranking
+regressions. Prize tests use isolated PostgreSQL fixtures, actual visit commands,
+real security filters, concurrent confirmations/issuers, injected post-insert
+failure, catalogue edits and exact expiry boundaries.
