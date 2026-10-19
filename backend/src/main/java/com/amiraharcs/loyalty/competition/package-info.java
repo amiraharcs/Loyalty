@@ -1,2 +1,2 @@
-/** Competition periods; prize assignment and settlement remain deferred. */
+/** Competition periods, benefit definitions and immutable issued entitlements; weekly settlement remains deferred. */
 package com.amiraharcs.loyalty.competition;

@@ -43,7 +43,7 @@ class WeeklyPeriodMigrationTests {
                     }
                     connection.commit();
                 }
-                var latest=migration(url,null);assertThat(latest.migrate().migrationsExecuted).isEqualTo(1);latest.validate();
+                var latest=migration(url,"19");assertThat(latest.migrate().migrationsExecuted).isEqualTo(1);latest.validate();
                 assertThat(latest.migrate().migrationsExecuted).isZero();
                 try(var connection=DriverManager.getConnection(url,database.getUsername(),database.getPassword());var statement=connection.createStatement()) {
                     try(var rows=statement.executeQuery("SELECT s.started_at,p.start_date,p.start_at,p.end_at,p.settlement_cutoff_at FROM loyalty.game_sessions s JOIN loyalty.weekly_periods p ON p.id=s.weekly_period_id ORDER BY s.started_at")) {
