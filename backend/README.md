@@ -1777,7 +1777,7 @@ persistence version, consumption ID, audit data or future competition linkage.
 
 `GAME_SESSION_LIFETIME=PT15M` and `GAME_ENGINE_VERSION=v1` configure
 `loyalty.game-sessions.lifetime` and `loyalty.game-sessions.engine-version`. Lifetime
-must be positive with microsecond precision; engine version is 1–40 ASCII letters,
+must be positive, at most 15 minutes, with microsecond precision; engine version is 1–40 ASCII letters,
 digits, dots, underscores or hyphens, starting with a letter/digit. Keep architecture
 defaults for v1. Settings are server-only snapshots: changing them affects new starts
 and cannot rewrite an existing run or its life's rechargeAt. UTC elapsed duration,
@@ -1910,8 +1910,9 @@ At 0 seconds scores 0..100 are valid; at 10 seconds 3600 passes and 3601 gives
 `409 SCORE_IMPLAUSIBLE`. At 10.999 seconds the ceiling remains 3600. Just before
 15 minutes elapsed floors to 899 and the ceiling is 314750. At exactly 900 seconds
 the formula's theoretical ceiling is 315100, but the default session is already
-expired and cannot accept any score. Elapsed is capped at 900 even if a server operator
-configured a longer session lifetime. A shorter configured expiry still wins.
+expired and cannot accept any score. Elapsed remains capped at 900 for any legacy
+session with a longer snapshotted lifetime; Issue #32 now rejects new lifetime
+configuration above 15 minutes. A shorter configured expiry still wins.
 Unknown engine versions give a safe 500 INTERNAL_ERROR, never a v1 fallback. This
 means configuring new starts with v2 requires implementing its validator before launch.
 The ceiling is a conservative screening rule; it **does not prove honest gameplay**
@@ -1990,3 +1991,111 @@ to loyalty points.
 - [Testcontainers PostgreSQL](https://java.testcontainers.org/modules/databases/postgres/)
 - [Architecture domain model](../docs/architecture/domain-model.md)
 - [Architecture security and testing](../docs/architecture/security-and-testing.md)
+
+## Weekly and all-time leaderboards (Issue #32)
+
+`GET /api/v1/leaderboards/weekly` and `GET /api/v1/leaderboards/all-time`
+require an active account with an explicit CUSTOMER grant. STAFF/ADMIN alone do
+not grant access. Both return `Cache-Control: no-store`; existing cookie-session
+security applies. These endpoints supersede the earlier sections describing
+leaderboards as deferred. No frontend ranking integration or prizes are added.
+
+Weekly periods run from **Monday 00:00 Europe/London inclusive** to next Monday
+00:00 exclusive. `startDate` is that local Monday; `startAt`, `endAt` and
+`settlementCutoffAt` are UTC instants. Real zone rules produce 167/169-hour weeks
+at spring/autumn DST transitions. The cutoff is 15 minutes after period end,
+the maximum session grace window. New session configuration now rejects lifetimes
+above 15 minutes so that a longer server override cannot invalidate this cutoff;
+historical run snapshots remain unchanged. Periods have OPEN/SETTLED status; this issue
+creates OPEN rows only and does not settle, snapshot or assign prizes.
+
+`V19__create_weekly_periods.sql` adds WeeklyPeriod and a mandatory restrictive
+`game_sessions.weekly_period_id` foreign key. Historical runs are backfilled from
+their original `started_at`, preserving scores, acceptance timestamps and life
+consumptions. It drains existing deferred completion checks before subsequent
+DDL. A database BEFORE INSERT trigger uses `loyalty.ensure_weekly_period` to
+get-or-create and assign the correct period, including for JPA session starts;
+Hibernate reads back the generated link. The function derives a deterministic
+UUID from the local Monday and uses its unique start-date constraint plus
+`ON CONFLICT` for concurrent creation. Period boundaries and session membership
+are immutable. Leaderboard reads may initialise missing **infrastructure period
+metadata**; they never consume lives, settle periods or change customer state.
+
+Weekly membership follows **session start**, even if score acceptance occurs just
+after the weekly boundary. Weekly defaults to the injected server Clock's current
+week. Optional `periodStart=YYYY-MM-DD` selects a historical/current Monday (years
+1–9999); non-Mondays and future weeks are rejected. All-time does not accept a
+period filter. Unknown, blank or repeated query parameters return 400.
+
+Both queries use only immutable accepted GameScores joined to COMPLETED sessions.
+PostgreSQL `DISTINCT ON (customer_id)` selects each customer's highest score and
+the **earliest acceptance at that score**. `row_number()` orders by score DESC,
+best acceptance ASC, customer UUID ASC. Ranks are sequential 1, 2, 3; a later equal
+score never changes the original tie-break. An accepted zero is ranked; rejected,
+active, expired and unscored runs are absent. Active CUSTOMER accounts participate;
+disabled/revoked accounts are excluded. As required by the architecture's weekly
+competition eligibility rule, accounts also holding STAFF/ADMIN are excluded from
+weekly rankings, but their personal gameplay records may appear in all-time.
+
+Response contract:
+
+```json
+{
+  "items": [{"rank": 1, "alias": "Coffee fan", "score": 5000, "isCurrentUser": false}],
+  "nextCursor": null,
+  "hasNext": false,
+  "currentUser": {"rank": null, "alias": "Member", "score": null, "isCurrentUser": true},
+  "period": null,
+  "serverTime": "2026-10-19T12:00:00Z"
+}
+```
+
+Weekly `period` contains `id`, `startDate`, `startAt`, `endAt`,
+`settlementCutoffAt` and `status`; all-time `period` is null. `currentUser` is
+computed globally, independently of the page/cursor. No accepted eligible score
+means null rank and score, never rank 0. All scores retain JavaScript-safe integer
+semantics (0 through 9007199254740991).
+
+Public aliases come only from the existing CustomerProfile leaderboard alias,
+never display name or email. Private, absent/blank, or email-like (`@` containing)
+aliases become the generic **Member**, retaining their rank. Entry DTOs expose no
+customer/user IDs, acceptance timestamps, email, roles or private profile data.
+Profiles already persist alias/privacy preferences, so no profile migration or
+profile-edit endpoint is needed for this issue.
+
+Pagination uses `size` (default 20, range 1–100) and `cursor`, returning `items`,
+`hasNext`, and `nextCursor` (null at end). The authenticated, encrypted opaque
+cursor preserves score + first-best acceptance + customer UUID and binds to
+weekly/start-date or all-time scope. Invalid, changed or cross-scope cursors return
+400. The SQL applies a keyset predicate after global ranking, fetches at most
+size+1 entries plus the caller's row, and returns page and own rank from **one SQL
+snapshot**. Stable data has no overlapping/missing page entries. This is a **live
+view**: accepted scores and eligibility changes between requests can move rows;
+there is no cross-request snapshot or frozen historical settlement result yet.
+
+Set `LEADERBOARD_CURSOR_KEY_BASE64` to a separate secret containing 32 random bytes
+in standard Base64 (generate with `openssl rand -base64 32`). Never reuse QR keys
+or put it into Vite/browser configuration. Use the same key across backend
+replicas/restarts so cursors remain valid. If omitted, a secure per-process key
+is generated; cursors then expire on restart and do not work across replicas.
+Rotating the key invalidates old cursors (400); clients restart from page one.
+There is no new third-party cryptography dependency: Java AES-256-GCM authenticates
+and encrypts the bounded cursor payload with a fresh random nonce.
+
+The existing session/score primary/unique indexes already support joins. V19 adds
+one partial `(weekly_period_id, customer_id, id)` index for COMPLETED sessions;
+unique period-start indexes serve lookup. Global aggregation/window ranking still
+scans eligible scores: measure query plans on production-scale data before adding
+indexes or a materialised projection. No Java-side full-score loading/sorting or
+OFFSET pagination is used.
+
+Tests cover PostgreSQL aggregation, tie-breaking (including unsigned UUID order),
+weekly/all-time separation, accepted zero, privacy, role/status access, pagination,
+cursor tampering/scope, generated session linkage, London DST and Monday
+boundaries, concurrent period creation, and a real V18→V19 historical backfill.
+Run `./mvnw -Dtest='Leaderboard*Tests,WeeklyPeriod*Tests' test` for focused checks;
+`./mvnw clean verify` runs all backend checks.
+
+Prize catalogue, cutoff-based settlement/snapshots, CustomerPrize, moderation,
+Friends/consent and frontend leaderboard integration remain deferred. The Friends
+prototype stays a frontend fixture. Issue #33 has not been started.
