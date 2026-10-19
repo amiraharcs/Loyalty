@@ -53,8 +53,8 @@ class PrizeHistoryTests extends PrizeTestSupport {
     }
     @ParameterizedTest @ValueSource(strings={"size=0","size=-1","size=101","size=bad","size=","cursor=bad","cursor=","customerId=foreign","status=AVAILABLE","size=1&size=2"})
     void rejectsMalformedAndUnsupportedQuery(String query) throws Exception {login(RoleCode.CUSTOMER).send(get(PRIZES+"?"+query),400);}
-    @Test void currentIssueOffersNoAssignmentReservationOrAdminCatalogueEndpoint() throws Exception {
+    @Test void customerAssignmentAndArbitraryAdminGrantRemainUnavailable() throws Exception {
         var browser=login(RoleCode.CUSTOMER);browser.send(post(PRIZES).header("X-CSRF-TOKEN",browser.csrf).contentType("application/json").content("{}"),405);
-        var admin=login(RoleCode.ADMIN);admin.send(post("/api/v1/admin/prizes").header("X-CSRF-TOKEN",admin.csrf).contentType("application/json").content("{}"),403);
+        var admin=login(RoleCode.ADMIN);admin.send(post("/api/v1/admin/prize-assignments").header("X-CSRF-TOKEN",admin.csrf).contentType("application/json").content("{}"),405);
     }
 }

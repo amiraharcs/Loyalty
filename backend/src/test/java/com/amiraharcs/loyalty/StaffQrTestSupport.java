@@ -48,6 +48,7 @@ abstract class StaffQrTestSupport {
     static final String PASSWORD = "a unique temporary identity phrase 752!";
     static final Instant NOW = Instant.parse("2026-10-14T12:00:00Z");
     static final AtomicInteger IPS = new AtomicInteger();
+    @Autowired jakarta.persistence.EntityManager fixtureEntities;
     @Autowired MockMvc mvc;
     @Autowired JsonMapper json;
     @Autowired JdbcTemplate jdbc;
@@ -96,6 +97,7 @@ abstract class StaffQrTestSupport {
         browser.userId=jdbc.queryForObject("SELECT id FROM loyalty.users WHERE canonical_email=?",UUID.class,email);
         jdbc.update("DELETE FROM loyalty.user_roles WHERE user_id=?",browser.userId);
         for(var role:roles) { jdbc.update("INSERT INTO loyalty.user_roles(user_id,role_code) VALUES (?,?)",browser.userId,role.name()); }
+        fixtureEntities.clear(); // Raw role fixtures must not leave registration's CUSTOMER collection cached.
         browser.csrf(); browser.send(post("/api/v1/auth/sessions").header("X-CSRF-TOKEN",browser.csrf).contentType("application/json")
                 .content(json.writeValueAsString(Map.of("email",email,"password",PASSWORD))),201);
         browser.csrf();return browser;
