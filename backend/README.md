@@ -2189,7 +2189,7 @@ an internal read-only collaborator, with no public assignment endpoint. It does
 not rank, settle, schedule, assign prizes, or change WeeklyPeriod status.
 WeeklyPrizeAssignment does not yet exist, so V20 has no invented assignment IDs
 or dangling assignment column. Database source checks currently permit only
-owned streak Visit sources. Issue #34 must add the actual WeeklyPrizeAssignment
+owned streak Visit sources. A later settlement issue must add the actual WeeklyPrizeAssignment
 entity/FK and extend source constraints before weekly CustomerPrize creation;
 settlement must recheck eligibility and use settled outcome evidence atomically.
 
@@ -2197,10 +2197,112 @@ Admin prize catalogue CRUD is deferred to a later admin phase. This issue adds n
 admin route, arbitrary award endpoint, prize redemption, reservation, fulfilment,
 frontend integration or Friends backend. Fixed definitions are versioned migration
 data; future management must use allowlisted DTOs, ADMIN/CSRF, audited mutations
-and optimistic concurrency. Issue #34 is not started here.
+and optimistic concurrency. See Issue #34 below for implemented admin management.
 
 Focused verification: `./mvnw -Dtest='Prize*Tests,Streak*Tests' test`.
 `./mvnw clean verify` also covers existing auth, loyalty, reward, game and ranking
 regressions. Prize tests use isolated PostgreSQL fixtures, actual visit commands,
 real security filters, concurrent confirmations/issuers, injected post-insert
 failure, catalogue edits and exact expiry boundaries.
+
+## Admin prize management (Issue #34)
+
+This section supersedes Issue #33's admin deferral. Weekly settlement remains
+unimplemented: this issue manages catalogue definitions and existing CustomerPrize
+records only. No WeeklyPrizeAssignment, arbitrary grant, reservation, redemption,
+points mutation or frontend admin UI is added.
+
+All routes require an active explicit ADMIN grant at the existing `/admin/**`
+security boundary and again through method security/fresh service checks. CUSTOMER
+and STAFF alone are denied. POST/PATCH require the existing CSRF token. Responses
+use `Cache-Control: no-store`; unknown/repeated/blank query parameters and unknown
+JSON fields are rejected. There is no DELETE endpoint.
+
+| Route | Purpose |
+| --- | --- |
+| POST /api/v1/admin/prizes | Create a catalogue definition; 201 + relative Location |
+| GET /api/v1/admin/prizes | Cursor-paged active and inactive definitions |
+| GET /api/v1/admin/prizes/{id} | Read definition and optimistic version |
+| PATCH /api/v1/admin/prizes/{id} | Edit future benefits or activate/deactivate |
+| GET /api/v1/admin/prize-assignments | Filter and page existing entitlements |
+| GET /api/v1/admin/prize-assignments/{id} | Inspect one entitlement snapshot |
+| POST /api/v1/admin/prize-assignments/{id}/revocations | Explicit reasoned correction |
+
+Create body fields: `name`, `active`, `benefitType`, `benefitDescription`,
+`benefitValue`, `rewardId`, `triggerType`, `weeklyRank`. REWARD requires an existing
+Reward UUID and null benefitValue; PERCENT_DISCOUNT requires an integer 1–100 and
+null rewardId. STREAK_MILESTONE requires a REWARD benefit and null weeklyRank;
+WEEKLY_RANK requires rank 1–4. Strings have bounded lengths and exclude NUL;
+unsupported benefit/trigger values, fractions and numeric strings return 400.
+Unknown Reward returns 404. Existing Reward references define the non-financial
+benefit; catalogue availability is not redemption permission.
+
+PATCH is partial and requires `expectedVersion` from the last admin read. Nullable
+benefit fields can be explicitly cleared; omitted fields retain state. The merged
+state is validated with the same create rules. Version mismatch or a concurrent
+optimistic-write conflict returns 409, never a silent last-writer overwrite. The
+admin DTO exposes `version` for this purpose; no ETag contract is introduced.
+`triggerType` and `weeklyRank` are immutable for the lifetime of a definition,
+including before its first assignment. Use a new definition for a different slot.
+Name/active/benefit changes affect future assignments only; historical CustomerPrize
+snapshot fields and benefit meaning remain frozen.
+
+`V21__support_prize_admin_management.sql` preserves V1–V20 and existing rows. It
+replaces all-row slot uniqueness with partial **active-definition** uniqueness:
+one active weekly definition per rank, and one active streak definition. Multiple
+inactive replacements are allowed. Create an inactive replacement, deactivate the
+old definition, then activate the replacement. Activating a competing definition
+returns 409. Seeded production definitions use these same rules and can be edited
+or deactivated; catalogue identity/source slots and delete/truncate are protected
+in PostgreSQL. A customer/Visit remains one entitlement even across replacements.
+
+With no active streak definition, normal qualifying Visit/EARN/Streak confirmation
+continues and adds safe `STREAK_PRIZE_SKIPPED` audit evidence with fixed
+`NO_ACTIVE_DEFINITION` code. It never creates a placeholder entitlement or extra
+points entry. Reenabling does not backfill reads or skipped milestones. Existing
+unexpired prizes remain valid until expiry or explicit revocation.
+
+Both admin lists use `size` (default 20, range 1–100), `cursor`, `items`, `hasNext`
+and `nextCursor`. Catalogue order is `createdAt DESC,id DESC`; assignment order is
+`awardedAt DESC,id DESC`. Assignment filters are allowlisted: `customerId`,
+`prizeId`, `status`, `triggerType`, `awardedFrom` inclusive and `awardedTo` exclusive.
+Times are UTC instants in years 0001–9999 with microsecond precision; a supplied
+from/to pair must be positive and at most 366 days. Cursors bind to the complete
+filter scope; cross-filter/cross-list reuse returns 400. These are live keyset
+views, not cross-request snapshots. V21 adds global catalogue/assignment history
+indexes; existing customer history/availability indexes remain in place.
+
+Assignment DTOs include support UUIDs (customerPrizeId, customerId, prizeId and
+triggerVisitId), frozen benefit/reward presentation, trigger, effective status and
+award/expiry instants. They expose no email, credentials, session values, entity
+version or revocation-audit internals. Stored AVAILABLE past its deadline is
+projected as EXPIRED consistently in detail, lists and status filtering.
+
+Revocation body: `{"reason":"Verified incorrect award"}`. Reason is mandatory,
+trimmed, 1–1000 characters and NUL-free. Only unexpired AVAILABLE can become
+REVOKED. RESERVED/REDEEMED/EXPIRED and future-issued state are rejected with 409;
+no expired or fulfilled benefit can be revived. Exact same-reason retries return
+the existing state without another audit; a changed reason conflicts. The row lock
+serialises competing revocations. The operation never changes points or issues a
+replacement prize. No arbitrary CustomerPrize PATCH, DELETE or manual grant exists.
+
+V21 adds `revocation_audit_id` on CustomerPrize referencing append-only AuditLog.
+The required reason and actor remain in AuditLog, outside the frozen snapshot.
+Revocation writes `CUSTOMER_PRIZE_REVOKED` with that reason, actor, target,
+server time and requestId, then changes status and audit reference atomically.
+The database allows only AVAILABLE→REVOKED with a matching reasoned audit event
+whose timestamp is within the original award/expiry interval. All other snapshot,
+source, ownership and timestamp changes, terminal-state rewrites, delete and
+truncate remain forbidden. Reads still project expiry without writes. A failure
+at any point rolls back both the state change and successful audit evidence.
+
+Catalogue events are PRIZE_CREATED, PRIZE_UPDATED, PRIZE_ACTIVATED and
+PRIZE_DEACTIVATED. Updates log only fixed changed-field names, never full request
+bodies. Revocation records only its required correction reason, not a generic
+request-body dump. Both mutation types commit their successful audit atomically.
+Reasons must not contain secrets; request DTO logging is redacted.
+
+Errors follow the shared RFC 9457 contract: invalid input 400, absent prize/reward/
+assignment 404, stale edit/occupied slot/invalid correction state 409, missing
+session 401, missing role or CSRF 403. Weekly settlement, immutable weekly outcomes,
+prize reservation/redemption/fulfilment and later P9 work remain deferred.
