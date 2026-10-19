@@ -15,8 +15,14 @@ public class AuditService {
     @Transactional(propagation = Propagation.MANDATORY)
     public void append(UUID actorUserId, String action, String targetType, UUID targetId, Instant occurredAt,
             UUID requestId, String safeMetadata) {
+        appendWithId(UUID.randomUUID(),actorUserId,action,targetType,targetId,occurredAt,requestId,safeMetadata);
+    }
+    /** Explicit event ID lets an operational transition reference immutable audit evidence atomically. */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void appendWithId(UUID id,UUID actorUserId,String action,String targetType,UUID targetId,Instant occurredAt,
+            UUID requestId,String safeMetadata) {
         jdbc.update("INSERT INTO loyalty.audit_logs(id,actor_user_id,actor_type,action,target_type,target_id,occurred_at,request_id,metadata) "
-                + "VALUES (?,?,'USER',?,?,?,?,?,CAST(? AS jsonb))", UUID.randomUUID(), actorUserId, action, targetType, targetId,
+                + "VALUES (?,?,'USER',?,?,?,?,?,CAST(? AS jsonb))", id, actorUserId, action, targetType, targetId,
                 java.sql.Timestamp.from(occurredAt), requestId, safeMetadata);
     }
 }

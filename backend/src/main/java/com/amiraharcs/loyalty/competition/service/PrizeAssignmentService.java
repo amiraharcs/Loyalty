@@ -59,9 +59,15 @@ public class PrizeAssignmentService {
                 || !visit.getBusinessDate().equals(streak.getLastQualifyingDate())) {
             return Optional.empty();
         }
-        var prize=prizes.lockStreakDefinition()
-                .orElseThrow(()->new IllegalStateException("Streak prize definition is missing"));
-        if(!prize.isActive()) {return Optional.empty();}
+        var definition=prizes.lockStreakDefinition();
+        if(definition.isEmpty()) {
+            var attributes=RequestContextHolder.getRequestAttributes();
+            UUID correlation=attributes instanceof ServletRequestAttributes servlet
+                    ?UUID.fromString(RequestIdFilter.requestId(servlet.getRequest())):UUID.randomUUID();
+            audit.append(actor,"STREAK_PRIZE_SKIPPED","VISIT",visitId,now,correlation,"{\"reasonCode\":\"NO_ACTIVE_DEFINITION\"}");
+            return Optional.empty();
+        }
+        var prize=definition.get();
         var reward=rewards.lockById(prize.getRewardId()).orElseThrow();
         var entitlement=CustomerPrize.streak(customer,visitId,prize,reward,now);
         entities.persist(entitlement);entities.flush();

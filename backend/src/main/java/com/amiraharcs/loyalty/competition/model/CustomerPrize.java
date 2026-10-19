@@ -4,28 +4,28 @@ import com.amiraharcs.loyalty.reward.model.Reward;
 import jakarta.persistence.*;
 import java.time.*;
 import java.util.*;
-import org.hibernate.annotations.Immutable;
 
 /** Issuance evidence and frozen benefit. Reservation/redemption are deliberately unavailable. */
-@Entity @Immutable
+@Entity
 @Table(name="customer_prizes",schema="loyalty")
 public class CustomerPrize {
     public static final Duration VALIDITY=Duration.ofDays(7);
     @Id private UUID id;
-    @Column(name="customer_id",nullable=false) private UUID customerId;
-    @Column(name="prize_id",nullable=false) private UUID prizeId;
-    @Enumerated(EnumType.STRING) @Column(name="trigger_type",nullable=false,length=24) private PrizeTriggerType triggerType;
-    @Column(name="trigger_visit_id") private UUID triggerVisitId;
-    @Column(name="prize_name_snapshot",nullable=false,length=200) private String prizeNameSnapshot;
-    @Enumerated(EnumType.STRING) @Column(name="benefit_type",nullable=false,length=24) private PrizeBenefitType benefitType;
-    @Column(name="benefit_description_snapshot",nullable=false,length=2000) private String benefitDescriptionSnapshot;
-    @Column(name="benefit_value") private Integer benefitValue;
-    @Column(name="reward_id") private UUID rewardId;
-    @Column(name="reward_name_snapshot",length=200) private String rewardNameSnapshot;
-    @Column(name="reward_description_snapshot",length=2000) private String rewardDescriptionSnapshot;
+    @Column(name="customer_id",nullable=false,updatable=false) private UUID customerId;
+    @Column(name="prize_id",nullable=false,updatable=false) private UUID prizeId;
+    @Enumerated(EnumType.STRING) @Column(name="trigger_type",nullable=false,length=24,updatable=false) private PrizeTriggerType triggerType;
+    @Column(name="trigger_visit_id",updatable=false) private UUID triggerVisitId;
+    @Column(name="prize_name_snapshot",nullable=false,length=200,updatable=false) private String prizeNameSnapshot;
+    @Enumerated(EnumType.STRING) @Column(name="benefit_type",nullable=false,length=24,updatable=false) private PrizeBenefitType benefitType;
+    @Column(name="benefit_description_snapshot",nullable=false,length=2000,updatable=false) private String benefitDescriptionSnapshot;
+    @Column(name="benefit_value",updatable=false) private Integer benefitValue;
+    @Column(name="reward_id",updatable=false) private UUID rewardId;
+    @Column(name="reward_name_snapshot",length=200,updatable=false) private String rewardNameSnapshot;
+    @Column(name="reward_description_snapshot",length=2000,updatable=false) private String rewardDescriptionSnapshot;
     @Enumerated(EnumType.STRING) @Column(nullable=false,length=16) private CustomerPrizeStatus status;
-    @Column(name="awarded_at",nullable=false) private Instant awardedAt;
-    @Column(name="expires_at",nullable=false) private Instant expiresAt;
+    @Column(name="awarded_at",nullable=false,updatable=false) private Instant awardedAt;
+    @Column(name="expires_at",nullable=false,updatable=false) private Instant expiresAt;
+    @Column(name="revocation_audit_id") private UUID revocationAuditId;
     protected CustomerPrize() { }
     public static CustomerPrize streak(UUID customer,UUID visit,Prize prize,Reward reward,Instant now) {
         if(!prize.isActive() || prize.getTriggerType()!=PrizeTriggerType.STREAK_MILESTONE
@@ -42,6 +42,11 @@ public class CustomerPrize {
         entitlement.awardedAt=Objects.requireNonNull(now).truncatedTo(java.time.temporal.ChronoUnit.MICROS);
         entitlement.expiresAt=entitlement.awardedAt.plus(VALIDITY);return entitlement;
     }
+    public void revoke(UUID auditId,Instant now) {
+        if(!isAvailableAt(now) || now.isBefore(awardedAt)) {throw new com.amiraharcs.loyalty.common.api.ConflictException();}
+        status=CustomerPrizeStatus.REVOKED;revocationAuditId=Objects.requireNonNull(auditId);
+    }
+    public UUID getRevocationAuditId() {return revocationAuditId;}
     public CustomerPrizeStatus effectiveStatus(Instant now) {
         return status==CustomerPrizeStatus.AVAILABLE && !now.isBefore(expiresAt)?CustomerPrizeStatus.EXPIRED:status;
     }

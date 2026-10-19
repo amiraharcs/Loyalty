@@ -4,7 +4,7 @@ import jakarta.persistence.*;
 import java.time.Instant;
 import java.util.UUID;
 
-/** Seeded v1 benefit catalogue; no arbitrary cash benefit or assignment source strings. */
+/** Admin-managed v1 benefit catalogue; no arbitrary cash benefit or assignment source strings. */
 @Entity
 @Table(name="prizes",schema="loyalty")
 public class Prize {
@@ -21,6 +21,24 @@ public class Prize {
     @Column(name="updated_at",nullable=false) private Instant updatedAt;
     @Version @Column(nullable=false) private long version;
     protected Prize() { }
+    public Prize(String name,boolean active,PrizeBenefitType type,String description,Integer value,UUID rewardId,
+            PrizeTriggerType trigger,Integer rank,Instant now) {
+        id=UUID.randomUUID();triggerType=java.util.Objects.requireNonNull(trigger);weeklyRank=rank;createdAt=now;
+        revise(name,active,type,description,value,rewardId,now);
+    }
+    public void revise(String name,boolean active,PrizeBenefitType type,String description,Integer value,UUID rewardId,Instant now) {
+        if(name==null || name.isBlank() || name.length()>200 || name.indexOf('\0')>=0
+                || description==null || description.isBlank() || description.length()>2000 || description.indexOf('\0')>=0
+                || type==null || (type==PrizeBenefitType.REWARD && (rewardId==null || value!=null))
+                || (type==PrizeBenefitType.PERCENT_DISCOUNT && (rewardId!=null || value==null || value<1 || value>100))
+                || (triggerType==PrizeTriggerType.STREAK_MILESTONE && (type!=PrizeBenefitType.REWARD || weeklyRank!=null))
+                || (triggerType==PrizeTriggerType.WEEKLY_RANK && (weeklyRank==null || weeklyRank<1 || weeklyRank>4))) {
+            throw new IllegalArgumentException("Invalid prize definition");
+        }
+        java.util.Objects.requireNonNull(now);
+        if(createdAt==null || now.isBefore(createdAt) || (updatedAt!=null && now.isBefore(updatedAt))) {throw new IllegalArgumentException("Update clock precedes catalogue time");}
+        this.name=name;this.active=active;benefitType=type;benefitDescription=description;benefitValue=value;this.rewardId=rewardId;updatedAt=now;
+    }
     public UUID getId() {return id;}
     public String getName() {return name;}
     public boolean isActive() {return active;}

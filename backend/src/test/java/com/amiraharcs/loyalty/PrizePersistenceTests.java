@@ -29,7 +29,7 @@ class PrizePersistenceTests extends PrizeTestSupport {
         rejected("UPDATE loyalty.prizes SET "+assignment+" WHERE weekly_rank=2","23514");
     }
     @Test void uniqueDefinitionsAndRestrictiveRewardForeignKeyAreEnforced() {
-        rejected("UPDATE loyalty.prizes SET weekly_rank=1 WHERE weekly_rank=2","23505");
+        rejected("UPDATE loyalty.prizes SET weekly_rank=1 WHERE weekly_rank=2","23514");
         rejected("DELETE FROM loyalty.rewards WHERE id='"+COFFEE+"'","23503");
         rejected("UPDATE loyalty.prizes SET reward_id='00000000-0000-0000-0000-000000000000' WHERE id='"+STREAK_PRIZE+"'","23503");
     }
@@ -39,7 +39,7 @@ class PrizePersistenceTests extends PrizeTestSupport {
         rejected("UPDATE loyalty.customer_prizes SET benefit_description_snapshot='Rewritten'","23514");
         rejected("DELETE FROM loyalty.customer_prizes","23514");
         rejected("TRUNCATE loyalty.customer_prizes","23514");
-        rejected("DELETE FROM loyalty.prizes WHERE id='"+STREAK_PRIZE+"'","23503");
+        rejected("DELETE FROM loyalty.prizes WHERE id='"+STREAK_PRIZE+"'","23514");
     }
     @ParameterizedTest @ValueSource(strings={"duplicate","foreign-customer","missing-visit","weekly-source","no-source","wrong-benefit","invalid-expiry","invalid-status","reserved","invalid-reward"})
     void invalidOrDuplicateEntitlementSourcesCannotCommit(String mode) throws Exception {

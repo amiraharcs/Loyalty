@@ -27,7 +27,7 @@ class PrizeMigrationTests {
                     // A historical projection alone is insufficient evidence for retroactive issuance.
                     statement.executeUpdate("INSERT INTO loyalty.streaks(customer_id,current_count,longest_count,last_qualifying_date) VALUES ('"+customer+"',20,20,'2025-01-20')");
                 }
-                var migration=at(url,null);assertThat(migration.migrate().migrationsExecuted).isEqualTo(1);
+                var migration=at(url,"20");assertThat(migration.migrate().migrationsExecuted).isEqualTo(1);
                 migration.validate();assertThat(migration.migrate().migrationsExecuted).isZero();
                 try(var connection=DriverManager.getConnection(url,database.getUsername(),database.getPassword());var statement=connection.createStatement();
                         var rows=statement.executeQuery("SELECT (SELECT count(*) FROM loyalty.prizes) definitions,(SELECT count(*) FROM loyalty.customer_prizes) entitlements,(SELECT count(*) FROM loyalty.point_transactions) ledger,(SELECT current_count FROM loyalty.streaks) streak")) {

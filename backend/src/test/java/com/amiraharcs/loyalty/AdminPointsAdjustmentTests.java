@@ -333,7 +333,8 @@ class AdminPointsAdjustmentTests {
             String sql = switch (operation) {
                 case "UPDATE" -> "UPDATE loyalty." + table + " SET id=id";
                 case "DELETE" -> "DELETE FROM loyalty." + table + " WHERE false";
-                default -> "TRUNCATE loyalty." + table;
+                // Include referencing tables so immutable-history triggers, rather than FK truncate refusal, are tested.
+                default -> "TRUNCATE loyalty." + table + " CASCADE";
             };
             assertThatThrownBy(() -> jdbc.execute(sql)).isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
         }
