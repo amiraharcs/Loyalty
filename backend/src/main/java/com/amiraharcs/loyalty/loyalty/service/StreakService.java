@@ -17,11 +17,12 @@ import org.springframework.transaction.annotation.*;
 @Service
 @Transactional(readOnly = true)
 public class StreakService {
+    private final com.amiraharcs.loyalty.competition.service.PrizeAssignmentService prizes;
     private final StreakRepository streaks;
     private final LoyaltyAccountService accounts;
     private final EntityManager entities;
-    public StreakService(StreakRepository streaks,LoyaltyAccountService accounts,EntityManager entities) {
-        this.streaks=streaks;this.accounts=accounts;this.entities=entities;
+    public StreakService(StreakRepository streaks,LoyaltyAccountService accounts,EntityManager entities,com.amiraharcs.loyalty.competition.service.PrizeAssignmentService prizes) {
+        this.streaks=streaks;this.accounts=accounts;this.entities=entities;this.prizes=prizes;
     }
     @Transactional(propagation = Propagation.MANDATORY)
     public Streak createForRegistration(UUID customerId) {
@@ -39,8 +40,12 @@ public class StreakService {
         if (streak.getLastQualifyingDate()!=null && visit.getBusinessDate().isBefore(streak.getLastQualifyingDate())) {
             throw new ConflictException(); // Do not silently corrupt a projection with an out-of-order historical command.
         }
+        boolean advances=!visit.getBusinessDate().equals(streak.getLastQualifyingDate());
         streak.recordQualifyingDate(visit.getBusinessDate());
         entities.flush(); // Projection/optimistic-lock failure must roll back Visit/EARN in the caller's transaction.
+        if(advances && streak.getCurrentCount()>0 && streak.getCurrentCount()%10==0) {
+            prizes.assignStreak(visit.getId()); // Joins this transaction; never awards from a read or same-day replay.
+        }
     }
     public StreakResponse snapshot(UUID customerId,LocalDate serverDate) {
         var streak=require(customerId);
