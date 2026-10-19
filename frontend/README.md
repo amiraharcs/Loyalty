@@ -1,81 +1,137 @@
 # GRND Loyalty frontend
 
-A React + TypeScript recreation of the user-provided coffee-shop prototype,
-using Vite, Tailwind CSS, React Router and Lucide icons. Application code is
-written from scratch; original public artwork and the font are retained to
-match the reference. See `src/assets/README.md` for asset provenance.
+React + TypeScript + Vite + Tailwind CSS + React Router. The GRND Jump engine,
+controls, fixed 60 Hz physics, renderer, animation and original artwork remain in
+place. Issue #31 connects its lifecycle to the real backend. Asset provenance is
+in `src/assets/README.md`; backend contracts are in `../docs/architecture`.
 
-## Run locally
+## Local setup
 
-Requires Node.js 22.12+ and npm. From `frontend/`:
+Use Node.js 22.12+ and npm. Start PostgreSQL and the Java backend following
+[`backend/README.md`](../backend/README.md), including the required local QR signing
+configuration. Provision a CUSTOMER through the existing registration API; this
+frontend does not add a registration form or seed customer accounts.
+
+From `frontend/`:
 
 ```sh
 npm ci
+cp .env.example .env.local
+# API_PROXY_TARGET defaults to http://127.0.0.1:8080; adjust only if the backend uses another port.
 npm run dev
-npm run build
-npm run lint
 ```
 
-Production output is written to the repository's `dist/` folder for Sites
-hosting. Hosting must fall back to `index.html` for React Router paths.
+Open `/game`. A visitor is sent to `/login`; use the actual registered email and
+password. There is no demo sign-in, localStorage auth token or Bearer JWT. Session
+bootstrap reads `/api/v1/auth/me`, browser cookies accompany requests, and a game API
+401 returns to the existing login route. After sign-in the requested route is restored.
+Bootstrap network failures show retry instead of inventing a session.
 
-## Pages
+`api/client.ts` is the shared same-origin client. It obtains an in-memory CSRF token
+from `/api/v1/auth/csrf` before unsafe requests, refreshes it after login/logout,
+clears stale CSRF on 401/403, includes cookies and parses Problem Details/Retry-After.
+Requests have a 15-second timeout and unsafe requests are never automatically retried.
+Normal UI uses allowlisted error copy, never raw internal server details.
 
-| Path | Purpose |
-| --- | --- |
-| `/home` | Greeting, points, streak, mascot, and Profile sheet |
-| `/card` | Flippable loyalty card, demo QR, and Wallet sheet |
-| `/game` | GRND Jump preview, playable game, and results |
-| `/leaderboard` | Weekly and Friends demo rankings |
-| `/login` | Demo email/password form |
+Vite proxies `/api` through API_PROXY_TARGET; components use only relative API paths.
+Production output is the repository `dist/` folder. A production same-origin gateway
+must route `/api` to the backend and other React routes to `index.html`; a static-only
+Sites deployment cannot provide this backend itself. Keep HttpOnly/Secure cookie
+settings from the backend. No wildcard CORS or cross-site cookie workaround is added.
+Never place credentials or signing secrets in VITE_* configuration.
 
-`/` redirects to `/home`. A first-time visitor opens the demo as Haroon.
-Signing out clears the demo session and routes to `/login`. A valid email
-and any nonempty password start a new demo session; passwords are never saved.
+## Game flow
 
-## How the code fits together
+- `api/game.ts` defines typed lives, session, score and summary DTOs and API methods.
+- `features/game/hooks/useLives.ts` loads backend lives. Until it succeeds Play is
+  disabled; a failed read never assumes three lives. The existing cup images reflect
+  availableLives/maxLives. Recharge display anchors backend serverTime to monotonic
+  `performance.now()`, so changing the device wall clock cannot grant lives.
+- At countdown zero the client asks the backend again. It never increments lives,
+  schedules a local refund, writes local lives or changes recharge timestamps.
+- `useGameLifecycle.ts` keeps request state separate from the canvas. One deliberate
+  Play action creates a UUID Idempotency-Key and waits for session creation before
+  starting exactly one game loop. The response supplies remaining lives and recharge
+  time without an unnecessary second GET. Only supported engine v1 is played.
+- A network/timeout/temporary failure offers retry using the same start key. An
+  ambiguous retry also reads the owned session: old replayed ACTIVE creation snapshots
+  are not blindly played after expiration. Zero lives never starts a local run.
+- The first game-over callback freezes one final safe integer and UUID key, stops
+  gameplay and submits only `{ score }`. Repeated callbacks cannot submit another
+  result. The result stays visible while saving; failed saves retry the same payload
+  and key. Unresolved saves block a new run from replacing the pending operation.
+- Accepted score data is server-owned. Personal best comes from game-summary on load
+  and after acceptance. Summary failure alone does not block play. No game best or
+  weekly score is persisted locally, and old localStorage lives, personal best and member authentication are ignored.
+- SCORE_ALREADY_SUBMITTED can recover the existing owned accepted score; the frozen
+  local run is retained separately and shown when different. SCORE_IMPLAUSIBLE shows
+  generic verification copy, without formula internals. Expired runs refetch lives
+  and require a new session without any local refund.
+- 403 shows a safe access error. 429 respects Retry-After using a display countdown
+  before another write; transport parsing retains status, code and requestId.
 
-- `routes/`: route definitions, session gating, and the shared app layout.
-- `components/ui/`: buttons, animated numbers, and an accessible bottom sheet.
-- `components/layout/`: GRND branding and the bottom navigation.
-- `components/loyalty/`: shared balance/streak displays and the Profile sheet.
-- `pages/`: page-specific components and composition.
-- `features/session/`: a small React context for the local demo member.
-- `features/leaderboard/`: opponent fixtures and score sorting.
-- `features/game/`: the canvas engine, physics, rendering, inputs and lives.
-- `styles/`: global layout, design tokens, fonts and small animations.
-- `utils/storage.ts`: optional browser storage with graceful fallback.
+All API calls happen at load/start/end/retry/recovery/recharge boundaries. The engine
+and physics loop contain no networking. Personal-best/summary updates and request
+status changes cannot create a second engine instance. Engine cleanup removes its
+input listeners and animation frame on navigation/unmount.
 
-Follow `App.tsx` → `AppRoutes.tsx` → `Home.tsx` to understand the main page.
-Home and Profile use the same balance and streak components. Profile's
-simulated scan changes the context, which updates all balance displays.
+## Active sessions and refresh
 
-The game uses a fixed 60 Hz simulation. React renders its preview, HUD and
-results; ordinary TypeScript updates the canvas player and platforms. Keeping
-physics outside React avoids component updates for every moving object.
+Session authority and pending keys are kept in memory only. Refresh/navigation may
+lose the local run or pending operation, but never refunds its consumed life. The
+backend has no current-active-session discovery endpoint. If a new tab/page receives
+GAME_SESSION_ACTIVE without a known recoverable session, it shows a wait/reload-after-
+expiry message and blocks repeated starts in that mounted page. A default active run
+lasts at most 15 minutes. This issue adds no discovery, cancellation or resume API.
+Refresh after an ambiguous score save may lose the local result; backend personal
+best and immutable accepted scores remain correct. Do not invent a new key to replace
+an uncertain result in the same mounted page; use the provided retry action.
 
-## Game controls and state
+## Screens still using prototype fixtures
 
-- Arrow keys or A/D steer horizontally.
-- Touch position steers on a phone; supported devices also offer tilt.
-- The bean bounces automatically and wraps across horizontal edges.
-- White platforms are normal, orange platforms crumble, and green platforms move.
-- A sugar cube activates Sugar Rush for 360 simulation steps.
-- Three lives are available; each Start Game uses one. Each used life returns
-  after two hours, even after refreshing the page.
-- Personal best, demo weekly score, member points and lives are device-local.
+The game is integrated; other product areas are not integrated by this issue.
+Home/Card points, streak, QR/Wallet and simulated scan remain presentation/demo flows;
+those displayed values are never sent to game APIs. Profile identity uses the backend
+display name. Backend `/auth/me` does not return email, so it is blank after refresh
+rather than fabricated. Opponents/leaderboard are explicitly previews; gameplay no
+longer writes demo weekly scores or claims a real rank or active prize award. There
+is no leaderboard/prize/weekly-period API integration, telemetry or game-to-points
+conversion. The visual layout, font, art and gameplay controls remain unchanged.
 
-## Prototype boundaries
+## Checks
 
-Production planning is documented in [P1 architecture decisions](../docs/architecture/README.md).
+```sh
+npm run lint
+npm run typecheck
+npm test
+npm run build
+```
 
-This remains a frontend demo. The QR is decorative; contactless scanning and
-Wallet are visual demos. Opponents are fixtures, the streak does not track real
-visits, and there is no backend, payment integration or automatic weekly reset.
-Game scores are separate from loyalty points. The prototype's prize wording
-is preserved, including its different game and leaderboard reward descriptions.
+Vitest + React Testing Library cover the lifecycle hook, component/engine boundary,
+shared cookie/CSRF client and session bootstrap. Tests cover loading, zero lives,
+server countdown refetch, no browser grants/refunds, start/end locks, stable retry
+keys, pending/accepted/error states, permission/session/validation failures, Retry-After,
+personal best and navigation cleanup. No physics rewrite or production test endpoint
+is needed.
 
-The main screens retain the prototype's centred 430px layout; active gameplay
-and the game-over overlay fill the viewport. Bottom sheets sit above navigation
-so their controls remain usable. Reduced-motion preferences, keyboard focus,
-Escape dismissal, and safe-area padding are supported.
+For real Chromium checks, use a **disposable database**, start backend and Vite, then:
+
+```sh
+npx playwright install chromium
+npm run test:e2e
+# Optional alternate Vite URL:
+E2E_BASE_URL=http://127.0.0.1:5174 npm run test:e2e
+```
+
+The browser suite registers synthetic CUSTOMER accounts through the real CSRF-
+protected API and signs in through the UI. It plays the actual engine, exhausts three
+lives, verifies score/personal-best persistence after refresh, checks active conflicts,
+and simulates lost successful start/score responses to exercise same-key recovery.
+A controlled request-tampering test verifies real server rejection and safe UI copy.
+No engine mock or backend change is used in these browser checks. Registration and
+gameplay create durable history: run this suite only with disposable development data.
+Two-hour recharge is covered by injected-clock backend tests plus frontend countdown/
+refetch tests; the browser suite does not wait two wall-clock hours.
+
+Issue #32 remains unstarted. Weekly/all-time/friends leaderboard integration, weekly
+periods, prizes and advanced anti-cheat remain deferred.
