@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { LogOut } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { useSession } from '../../features/session/SessionContext'
@@ -9,6 +10,7 @@ import StreakCard from './StreakCard'
 export default function ProfileSheet({ onClose }: { onClose: () => void }) {
   const { member, addPoints, signOut } = useSession()
   const navigate = useNavigate()
+  const [logoutError, setLogoutError] = useState('')
   if (!member) return null
   return (
     <BottomSheet title="Profile" onClose={onClose}>
@@ -24,7 +26,8 @@ export default function ProfileSheet({ onClose }: { onClose: () => void }) {
           <p className="mb-3 text-[12px] text-muted">In the real app, a barista scans your QR code to add points. Tap below to simulate a visit (+100 pts).</p>
           <Button variant="accent" className="!rounded-xl !py-3 !text-[14px]" onClick={() => addPoints(100)}>Simulate Scan (+100 pts)</Button>
         </div>
-        <Button variant="secondary" onClick={() => { signOut(); onClose(); navigate('/login') }}><span className="flex items-center justify-center gap-2"><LogOut size={16} />Sign out</span></Button>
+        {logoutError && <p role="alert" className="text-[13px] text-red-500">{logoutError}</p>}
+        <Button variant="secondary" onClick={async () => { try { await signOut(); onClose(); navigate('/login') } catch { setLogoutError('Could not sign out. Please retry.') } }}><span className="flex items-center justify-center gap-2"><LogOut size={16} />Sign out</span></Button>
       </div>
     </BottomSheet>
   )

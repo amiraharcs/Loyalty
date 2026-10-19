@@ -9,4 +9,4 @@ export interface Player {
 }
 export interface SugarCube { x: number; y: number }
 export type GamePhase = 'idle' | 'playing' | 'gameover'
-export interface GameResult { score: number; best: number; newBest: boolean; rank: number }
+export interface GameResult { score: number; best: number | null; newBest: boolean }

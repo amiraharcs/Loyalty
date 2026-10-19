@@ -7,5 +7,3 @@ export const PLAYER_HEIGHT = 101
 export const PLATFORM_HEIGHT = 13
 export const CAMERA_LINE = 0.38
 export const SUGAR_RUSH_FRAMES = 360
-export const MAX_LIVES = 3
-export const LIFE_RECHARGE_MS = 2 * 60 * 60 * 1000
