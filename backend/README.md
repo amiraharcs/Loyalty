@@ -2340,8 +2340,8 @@ REPEATABLE READ transaction, separate from auditing.
 No customer ID is echoed and no lookup token/table is introduced. A future
 manual-resolution request can retain the original opaque identifier client-side,
 but must resolve it again and recheck identity, STAFF/store scope and all visit
-rules. This response grants no authority and is not a ScanResolution. Issue #36,
-member-ID presentation, manual resolution, staff UI and broader support searches
+rules. This response grants no authority and is not a ScanResolution.
+Member-ID presentation, manual resolution, staff UI and broader support searches
 remain deferred. `/staff/visits` still accepts only a trusted ScanResolution;
 lookup never creates/consumes one, creates a visit, changes points/streaks, consumes
 QRs, or redeems/fulfils benefits.
@@ -2373,3 +2373,85 @@ Never enable request-parameter/bind-value TRACE logging in production. Configure
 reverse-proxy/access logs to record the path without lookup query values as well;
 application filtering cannot redact a proxy's original request line. No schema
 migration is needed; V1–V21 remain unchanged.
+
+## Admin account and staff management (Issue #36)
+
+All routes below require an ACTIVE identity with an explicit ADMIN grant and
+use no-store allowlisted DTOs. Browser mutations require CSRF. Service methods
+recheck database authority, including after waiting for management locks.
+
+| Route | Contract |
+| --- | --- |
+| `GET /api/v1/admin/customers` | Cursor list; filters `customerId`, `status`; `size` 1–100, default 20. |
+| `GET /api/v1/admin/customers/{customerId}` | Customer detail, including disabled/historical profiles. |
+| `GET /api/v1/admin/staff` | Cursor list; filters `userId`, `status`; same page bounds. |
+| `GET /api/v1/admin/staff/{userId}` | Current STAFF or an identity with retained assignment history. |
+| `PATCH /api/v1/admin/users/{userId}` | Only `{"status":"ACTIVE"}` or `{"status":"DISABLED"}`. |
+| `POST /api/v1/admin/users/{userId}/roles/{role}` | Grant an explicit CUSTOMER, STAFF or ADMIN role; empty body. |
+| `DELETE /api/v1/admin/users/{userId}/roles/{role}` | Revoke that mutable grant, preserving all domain history. |
+| `POST /api/v1/admin/staff-store-assignments` | `{"staffUserId":"...","storeId":"..."}`; returns 200 for creation/retry/reactivation. |
+| `PATCH /api/v1/admin/staff-store-assignments/{staffUserId}/{storeId}` | `{"active":false}` or `{"active":true}`; follows the existing composite primary key. |
+
+Customer responses contain customerId, userId, displayName, status, createdAt,
+explicit roles, ledger balance and displayed London-date streak. Staff responses
+contain userId, optional displayName, status, createdAt, explicit roles and active
+assignment store IDs. A store ID here describes the assignment flag; an inactive
+store still blocks service through StaffStoreScopeService. Former staff with
+assignment history remain visible for administration; visibility grants no role.
+No credential hashes, sessions, security metadata, email/contact fields, full
+histories or ORM entities are exposed. Lookup query masking also covers admin
+customer/staff routes, including rejected personal search values. Search deliberately supports only exact
+opaque IDs and account status; no email/name/fuzzy PII search is introduced.
+Unknown/repeated filters, invalid status/role/input and malformed or filter-mismatched
+cursors fail safely. Pages sort by user createdAt DESC, userId DESC; opaque cursors
+are versioned and bound to customer/staff list kind and filters. Lists use targeted
+SQL projections, including bounded-page roles/assignment arrays without ORM N+1.
+
+Roles have no hierarchy. STAFF may stand alone or coexist with CUSTOMER; ADMIN
+alone grants neither. CUSTOMER grants require an existing CustomerProfile, since
+registration owns profile/account/streak/lives onboarding; this issue never
+fabricates those aggregates. No user-creation/password-management API is added.
+Activation restores eligibility but never restores deleted grants or reactivates
+assignments. Disabling an identity and revoking STAFF both deactivate all active
+staff assignments in the same transaction. Assign/reactivate requires an ACTIVE
+STAFF identity and ACTIVE store; missing user/store/assignment is 404, ineligible
+state is 409. Concurrent exact assignment retries return one logical pair.
+Original assignedBy/assignedAt remain immutable per the existing model; updatedAt
+changes on transitions and the new actor is recorded in audit. No assignment row
+is deleted or given an invented surrogate ID.
+
+All account status, role and assignment mutations take one named PostgreSQL
+transaction advisory lock before target row locks. This deliberately conservative
+v1 serialisation spans processes sharing the database, avoids opposing-user lock
+order deadlocks, and covers all paths that can affect the active-admin count.
+After obtaining it, authority is rechecked from current database grants. Removing
+ADMIN or disabling an ACTIVE admin requires another ACTIVE admin to remain;
+otherwise 409 LAST_ADMIN_REQUIRED. Concurrent disable/revoke operations therefore
+cannot remove both final admins. This service invariant also applies to self-edits;
+operator SQL/bootstrap procedures must preserve it rather than bypass the API.
+No schema support or migration is necessary; V1–V21 are unchanged.
+
+Every real status/role change deletes the target's persisted Spring Session rows
+inside the same transaction (only transient attributes cascade). Existing cookies
+cannot retain old privileges and a fresh login/CSRF bootstrap is required, including
+after a new grant or reactivation. Fresh SessionStateFilter database checks still
+apply; password-change detection continues using the existing password-version
+check. Assignment changes need no session rotation: active scope is queried on
+every service operation. Exact no-op retries do not revoke sessions or emit
+misleading duplicate change events.
+
+Atomic mutation events are USER_DISABLED, USER_ACTIVATED, ROLE_GRANTED,
+ROLE_REVOKED, STAFF_STORE_ASSIGNED, STAFF_STORE_DEACTIVATED and
+STAFF_STORE_REACTIVATED. Automatic assignment deactivations have one event per
+changed pair alongside the parent account/role event. Metadata contains only the
+fixed role or trusted store UUID; actor, target user, request ID and server time
+are separate audit fields. No mandatory free-text reason is invented. Audit failure
+rolls back the mutation, session revocation and assignment changes together.
+Rejected/no-op operations create no successful mutation event. Successful support
+reads emit ADMIN_CUSTOMERS_LIST, ADMIN_CUSTOMER_VIEW, ADMIN_STAFF_LIST or
+ADMIN_STAFF_VIEW after the read transaction ends, without storing raw filters;
+read audit failure prevents disclosure. Historical visits, ledger, redemptions,
+scores, prizes and audit records are never deleted or rewritten.
+
+Frontend admin UI, password reset/impersonation, bulk import, identity deletion,
+audit browsing and reporting are outside this issue. Issue #37 is not started.
