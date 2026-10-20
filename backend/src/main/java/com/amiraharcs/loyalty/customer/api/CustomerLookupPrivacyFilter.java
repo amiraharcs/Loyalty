@@ -11,13 +11,15 @@ import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
-/** Framework DEBUG request descriptions see no lookup query. Parameter binding still sees the real values. */
+/** Framework DEBUG descriptions see no customer/staff lookup query. Binding still sees real values. */
 @Component
 @Order(Ordered.HIGHEST_PRECEDENCE + 1)
 public class CustomerLookupPrivacyFilter extends OncePerRequestFilter {
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
-        return !request.getRequestURI().equals(request.getContextPath() + "/api/v1/staff/customers");
+        String path = request.getRequestURI().substring(request.getContextPath().length());
+        return java.util.stream.Stream.of("/api/v1/staff/customers", "/api/v1/admin/customers", "/api/v1/admin/staff")
+                .noneMatch(route -> path.equals(route) || path.startsWith(route + "/"));
     }
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
