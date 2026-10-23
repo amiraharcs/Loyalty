@@ -15,9 +15,8 @@ public class LeaderboardQuery {
     public record Row(boolean own, long rank, UUID customerId, String alias, long score, Instant acceptedAt) {
         public Position position() { return new Position(score,acceptedAt,customerId); }
     }
-    public List<Row> read(UUID periodId,UUID customerId,int limit,Position after) {
-        boolean weekly=periodId!=null;
-        String sql="""
+    private static String ranked(boolean weekly) {
+        return """
             WITH best AS (
                 SELECT DISTINCT ON (s.customer_id) s.customer_id, g.score, g.accepted_at
                 FROM loyalty.game_scores g
@@ -32,7 +31,17 @@ public class LeaderboardQuery {
                 ORDER BY s.customer_id, g.score DESC, g.accepted_at ASC
             ), ranked AS (
                 SELECT row_number() OVER (ORDER BY score DESC,accepted_at ASC,customer_id ASC) AS rank, * FROM best
-            ), page AS (
+            )\n""";
+    }
+    /** Same authoritative eligibility/best-score/ranking CTE as customer pages. */
+    public long participantCount(UUID periodId) {
+        if(periodId==null) {throw new IllegalArgumentException("Weekly period required");}
+        return jdbc.queryForObject(ranked(true)+" SELECT count(*) FROM ranked",new MapSqlParameterSource("period",periodId),Long.class);
+    }
+    public List<Row> read(UUID periodId,UUID customerId,int limit,Position after) {
+        boolean weekly=periodId!=null;
+        String sql=ranked(weekly)+"""
+            , page AS (
                 SELECT * FROM ranked
             """+(after==null?"":"""
                 WHERE score < :score OR (score = :score AND accepted_at > :accepted)
