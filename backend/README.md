@@ -2455,3 +2455,92 @@ scores, prizes and audit records are never deleted or rewritten.
 
 Frontend admin UI, password reset/impersonation, bulk import, identity deletion,
 audit browsing and reporting are outside this issue. Issue #37 is not started.
+
+## Operational dashboard read APIs (Issue #37)
+
+All routes are ADMIN-only GETs under `/api/v1/admin/reports`, with fresh service
+role/status checks and no-store DTOs. ADMIN does not need CUSTOMER or STAFF.
+These endpoints read domain facts in a short read-only REPEATABLE READ snapshot;
+there are no business writes, expiry updates, weekly-period creation, dashboard
+view audit events, audit browsing or UI. Existing session bookkeeping is unchanged.
+
+| Route | Filters and meaning |
+| --- | --- |
+| `/overview` | No filters. Current active explicit customer/staff identities and stores; today's visits/EARN/redemption points/fulfilled redemptions/scores; current pending redemptions, reward availability, active game sessions, available prizes and current week. |
+| `/visits` | `from`, `to` ISO dates and optional `storeId`. Qualifying visits, distinct customers, counts by London business date and store. |
+| `/points` | `from`, `to` RFC3339 instants and optional `storeId`. Immutable ledger EARN, REDEMPTION, REFUND and positive/negative ADJUSTMENT counts and magnitudes. |
+| `/redemptions` | Instant range and optional `storeId`. Request-time cohort grouped by effective current status and store, using frozen point-cost snapshots. |
+| `/game` | Instant range. Started-session cohort counts, unique players, accepted-score statistics by acceptance time, and active sessions now. No store filter. |
+| `/competition` | Instant range for prize award cohorts; current-week ranking independently of that range. Prize states/triggers, weekly definitions and top five eligible aliases/ranks/scores. No store filter. |
+
+All ranges are half-open: from inclusive, to exclusive. Visits default to the
+last seven London business dates including today (`to` tomorrow); other activity
+ranges default to seven elapsed days ending at the captured server time. If only
+`to` is supplied, `from` defaults to seven days before it; if only `from` is supplied,
+the normal default `to` applies. Maximum 90 civil dates for visits and 90×24 hours
+for instant activity. Invalid/reversed/equal/oversized ranges, duplicate/unknown
+filters or unsupported store filters return safe 400. Unknown stores return 404;
+inactive stores remain reportable history. Missing sessions return 401 and
+non-admin roles 403. GET requires no CSRF token. Results include range/asOf fields
+where applicable. Finer-than-microsecond input bounds use ceiling comparisons
+against stored microsecond facts, preserving precise half-open semantics.
+
+Overview `businessDate` and its today's timestamp windows begin at London midnight,
+including 23/25-hour DST days. Operational instants are UTC. Week boundaries come
+from WeeklyPeriod's London civil week, never a fixed 168-hour approximation.
+Report reads do not call the get-or-create weekly service: a week with no persisted
+period reports computed boundaries, materialized=false, status=NOT_CREATED and
+zero activity. Existing period status/boundaries are read as stored. The explicit
+settlementImplemented=false prevents implying weekly settlement exists.
+
+Point totals use the immutable ledger, never account versions or cached balances.
+Redeemed and negative-adjustment amounts are positive magnitudes, with counts;
+they are not netted against earnings. Store attribution is supported only for
+EARN→Visit and REDEMPTION→RewardRedemption source FKs. Current REFUND records and
+ADJUSTMENT have no reliable store link, so store-filtered points exclude both and
+set unattributedTypesExcluded=true. Global reports include them. Exact sums retain
+JavaScript-safe integer checking and fail safely rather than silently losing precision.
+
+Redemption cohorts use requestedAt; their status is current asOf, not a reconstructed
+historical transition state. Stale PENDING rows past expiresAt project EXPIRED
+without updating them. Fulfilled-today overview counts use fulfilledAt instead.
+Historical costs are pointCostSnapshot, independent of catalogue edits. Active
+reward counts distinguish currently available, active future, inactive and ended.
+
+Game started/completed/expired/activeInRange/uniquePlayers refer to sessions started
+inside the selected interval. ACTIVE rows past their deadline project EXPIRED;
+no job is run by reads. Accepted-score count/mean/max use GameScore.acceptedAt in
+the interval independently of the started cohort; raw rejected submissions are
+excluded. Empty score statistics have null mean/max. activeSessionsNow is global.
+
+Competition participants/top entries share the authoritative leaderboard ranking
+CTE: active CUSTOMER, no STAFF/ADMIN for weekly eligibility, best score per customer,
+score descending, first acceptance ascending, customer UUID tie-break. Private/
+email-like aliases become Member; no identity IDs are returned. acceptedScores
+counts all accepted scores assigned to that week, including users ineligible for
+ranking; eligibleParticipants is the rank-eligible unique count. Prize cohorts use
+awardedAt and effective current state (AVAILABLE past expiry projects EXPIRED).
+RESERVED/REDEEMED and WEEKLY_RANK fields remain zero until real workflows produce
+those records; no assignments or settlement facts are invented.
+
+Daily series contain only dates with activity (at most 90). Store-group aggregates
+sort by store UUID, return at most 100 groups and expose hasMoreStores; overall totals
+and distinct-customer counts still cover the entire filtered cohort. No customer
+history/detail list, cursor pagination or OFFSET is introduced. DTOs exclude email,
+credentials, session/CSRF/QR data, rejected payloads and audit metadata. SQL uses fixed
+projections and bound parameters; there are no client-selected columns or sorts.
+
+V22 adds only four global time indexes: point_transactions(created_at),
+reward_redemptions(requested_at), game_sessions(started_at), game_scores(accepted_at).
+Existing customer/account-leading history indexes do not narrow these predicates;
+visits already have a business_date index, and prize award-time indexing exists.
+No redundant visit/prize indexes or summary tables are added. EXPLAIN ANALYZE in
+an isolated PostgreSQL 17 database with 20,000 customers/sessions/scores/redemptions
+and 40,000 ledger rows changed selective one-day predicates from sequential to
+indexed bitmap scans. Observed before→after milliseconds: ledger 8.607→0.167,
+redemptions 5.346→0.140, sessions 10.705→0.106, scores 1.879→0.151. These are local
+plan-validation measurements, not deployment latency guarantees. Overview totals
+and ranking inherently aggregate current state; larger installations may need
+measurement-led tuning. No materialized views or reporting caches are introduced.
+V1–V21 are unchanged. Exports, scheduled email, BI/charts/UI, audit-log browsing
+(Issue #38), prize redemption and weekly settlement remain deferred.
