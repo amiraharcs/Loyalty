@@ -36,7 +36,7 @@ class MigrationTests {
     void migratesEmptyDatabaseWithOnlyImplementedDomainAndSessionTablesAndCanRunAgain() throws Exception {
         withEmptyDatabase(url -> {
             var flyway = flyway(url);
-            assertThat(flyway.migrate().migrationsExecuted).isEqualTo(21);
+            assertThat(flyway.migrate().migrationsExecuted).isEqualTo(22);
             flyway.validate();
             assertThat(flyway.migrate().migrationsExecuted).isZero();
             try (var connection = DriverManager.getConnection(url,
@@ -68,7 +68,7 @@ class MigrationTests {
                 insert.setObject(1, identity);
                 insert.executeUpdate();
             }
-            assertThat(flyway(url).migrate().migrationsExecuted).isEqualTo(18);
+            assertThat(flyway(url).migrate().migrationsExecuted).isEqualTo(19);
             try (var connection = DriverManager.getConnection(url,
                     PostgresTestDatabase.DATABASE.getUsername(), PostgresTestDatabase.DATABASE.getPassword());
                  var statement = connection.createStatement();
@@ -103,7 +103,7 @@ class MigrationTests {
                 }
             }
             var migrated = flyway(url);
-            assertThat(migrated.migrate().migrationsExecuted).isEqualTo(17);
+            assertThat(migrated.migrate().migrationsExecuted).isEqualTo(18);
             migrated.validate();
             assertThat(migrated.migrate().migrationsExecuted).isZero();
             try (var connection = DriverManager.getConnection(url,
@@ -174,7 +174,7 @@ class MigrationTests {
                         + UUID.randomUUID() + "','" + ids[2] + "',10,'ADJUSTMENT','" + ids[0] + "','Synthetic baseline',now())");
             }
             var upgraded = flyway(url);
-            assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(15); upgraded.validate();
+            assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(16); upgraded.validate();
             assertThat(upgraded.migrate().migrationsExecuted).isZero();
             try (var connection = DriverManager.getConnection(url, PostgresTestDatabase.DATABASE.getUsername(),
                     PostgresTestDatabase.DATABASE.getPassword()); var statement = connection.createStatement();
@@ -522,6 +522,22 @@ class MigrationTests {
         });
     }
 
+    @Test void versionTwentyTwoAddsOnlyReportingIndexesAndPreservesExistingLedger() throws Exception {
+        withEmptyDatabase(url->{
+            atVersion(url,"21").migrate();var ids=seedLegacyIdentity(url);
+            try(var connection=DriverManager.getConnection(url,PostgresTestDatabase.DATABASE.getUsername(),PostgresTestDatabase.DATABASE.getPassword());var statement=connection.createStatement()) {
+                statement.executeUpdate("INSERT INTO loyalty.point_transactions(id,account_id,signed_amount,type,actor_id,reason,created_at) VALUES ('"+UUID.randomUUID()+"','"+ids[2]+"',17,'ADJUSTMENT','"+ids[0]+"','Synthetic reporting migration',now())");
+                var migration=atVersion(url,"22");assertThat(migration.migrate().migrationsExecuted).isEqualTo(1);migration.validate();assertThat(migration.migrate().migrationsExecuted).isZero();
+                try(var values=statement.executeQuery("SELECT SUM(signed_amount),(SELECT version FROM loyalty.loyalty_accounts WHERE id='"+ids[2]+"') FROM loyalty.point_transactions")) {
+                    assertThat(values.next()).isTrue();assertThat(values.getLong(1)).isEqualTo(17);assertThat(values.getLong(2)).isEqualTo(1);
+                }
+                try(var indexes=statement.executeQuery("SELECT indexname FROM pg_indexes WHERE schemaname='loyalty' AND indexname LIKE 'ix_report_%' ORDER BY indexname")) {
+                    var names=new java.util.ArrayList<String>();while(indexes.next()) {names.add(indexes.getString(1));}
+                    assertThat(names).containsExactly("ix_report_game_scores_time","ix_report_game_sessions_time","ix_report_point_transactions_time","ix_report_reward_redemptions_time");
+                }
+            }
+        });
+    }
     private static Flyway atVersion(String url, String version) {
         return Flyway.configure().dataSource(url, PostgresTestDatabase.DATABASE.getUsername(),
                 PostgresTestDatabase.DATABASE.getPassword()).schemas("loyalty").defaultSchema("loyalty")
